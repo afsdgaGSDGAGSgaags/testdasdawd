@@ -883,20 +883,14 @@ local mainSuccess, mainError = pcall(function()
 
         RightGroupBox:AddDivider()
         local TrackerLabel = RightGroupBox:AddLabel('Active Bots Connected: 0')
-        local BotNamesLabel = RightGroupBox:AddLabel('')
-
-        -- --- EXTENDED VERTICAL PADDING SPACE ---
-        -- Structural blank labels to push the RightGroupBox length downward
-        -- This provides plenty of space for long multi-line bot names without text clipping.
-        RightGroupBox:AddLabel('')
-        RightGroupBox:AddLabel('')
-        RightGroupBox:AddLabel('')
-        RightGroupBox:AddLabel('')
-        RightGroupBox:AddLabel('')
-        RightGroupBox:AddLabel('')
-        RightGroupBox:AddLabel('')
-        RightGroupBox:AddLabel('')
-        -- ---------------------------------------
+        
+        -- --- BOT ROW LABELS MATRIX POOL ---
+        -- Pre-allocates up to 15 completely distinct element rows so they can never overlap layout positions
+        local BotLabelsPool = {}
+        for idx = 1, 15 do
+            BotLabelsPool[idx] = RightGroupBox:AddLabel('')
+        end
+        -- ----------------------------------
 
         task.spawn(function()
             while Running do
@@ -921,10 +915,19 @@ local mainSuccess, mainError = pcall(function()
                     
                     TrackerLabel:SetText('Active Bots Connected: ' .. tostring(activeCount))
                     
-                    if activeCount > 0 then
-                        BotNamesLabel:SetText(table.concat(connectedNames, "\n"))
-                    else
-                        BotNamesLabel:SetText('None connected')
+                    -- Dynamic allocation across pre-built label lines
+                    for idx = 1, 15 do
+                        local nameForThisLine = connectedNames[idx]
+                        if nameForThisLine then
+                            BotLabelsPool[idx]:SetText(nameForThisLine)
+                        else
+                            -- Clear out unused label slot frames entirely
+                            if idx == 1 and activeCount == 0 then
+                                BotLabelsPool[idx]:SetText('None connected')
+                            else
+                                BotLabelsPool[idx]:SetText('')
+                            end
+                        end
                     end
                 end)
             end
