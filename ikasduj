@@ -49,6 +49,10 @@ local InfiniteWindowGlobal = 1.4
 local CurrentTargetGlobal = ""
 local ChatSpamActiveGlobal = false
 
+-- Cached cluster state to prevent file read collisions
+local BotIndexGlobal = 1
+local TotalBotsGlobal = 1
+
 -- Chat Cycle Phrases List
 local ChatPhrases = {
     "YOU STOOD NO CHANCE.",
@@ -141,8 +145,11 @@ end
 -- --- MAIN EXECUTION WRAPPER ---
 local mainSuccess, mainError = pcall(function()
     
-    -- --- BOT REGISTRATION ---
+    -- --- BOT REGISTRATION & AUTOMATIC ANTI-AFK ---
     if not IsMaster then
+        -- Automatically load and activate the Anti-AFK engine for bot instances
+        SetAntiAFKState(true)
+
         task.spawn(function()
              while Running do
                 local data = GetClusterData()
@@ -236,23 +243,9 @@ local mainSuccess, mainError = pcall(function()
                         hum.Jump = true
                     end
                 end
-
-                local botList = {}
-                local data = GetClusterData()
-                if data.ActiveBots then
-                    for bName, timestamp in pairs(data.ActiveBots) do
-                        if os.time() - timestamp < 8 then
-                            table.insert(botList, bName)
-                        end
-                    end
-                end
-                table.sort(botList)
-
-                local botIndex = table.find(botList, LocalPlayer.Name) or 1
-                local totalBots = #botList > 0 and #botList or 1
         
                 angle = angle + (dt * (speedValue or 22))
-                local spreadAngle = angle + ((botIndex - 1) * (math.pi * 2 / totalBots))
+                local spreadAngle = angle + ((BotIndexGlobal - 1) * (math.pi * 2 / TotalBotsGlobal))
                 
                 local targetHRP = target.Character.HumanoidRootPart
                 local radius = radiusValue or 6
@@ -312,6 +305,19 @@ local mainSuccess, mainError = pcall(function()
                 InfiniteWindowGlobal = data.InfiniteWindow or 1.4
                 CurrentTargetGlobal = data.Target or ""
                 ChatSpamActiveGlobal = data.ChatSpam or false
+                
+                local botList = {}
+                if data.ActiveBots then
+                    for bName, timestamp in pairs(data.ActiveBots) do
+                        if os.time() - timestamp < 8 then
+                            table.insert(botList, bName)
+                        end
+                    end
+                end
+                table.sort(botList)
+                
+                BotIndexGlobal = table.find(botList, LocalPlayer.Name) or 1
+                TotalBotsGlobal = #botList > 0 and #botList or 1
                 
                 if data.Command ~= lastCommand or data.Target ~= lastTarget or data.OrbitSpeed ~= lastSpeed or data.OrbitRadius ~= lastRadius then
                     lastCommand = data.Command
@@ -379,16 +385,6 @@ local mainSuccess, mainError = pcall(function()
             while Running do
                 local actionAllowed = (ActiveCommandGlobal == "ORBIT" or ActiveCommandGlobal == "ATTACH")
                 
-                local data = GetClusterData()
-                local botList = {}
-                if data.ActiveBots then
-                    for bName, _ in pairs(data.ActiveBots) do table.insert(botList, bName) end
-                end
-                table.sort(botList)
-  
-                local idx = table.find(botList, LocalPlayer.Name) or 1
-                local totalActiveCount = #botList > 0 and #botList or 1
-                
                 if CurrentTargetGlobal and CurrentTargetGlobal ~= "" and actionAllowed then
                     local target = Players:FindFirstChild(CurrentTargetGlobal)
                     local inputEvent = GetHiddenInputRemote()
@@ -400,10 +396,10 @@ local mainSuccess, mainError = pcall(function()
                         if AutoM1ActiveGlobal and inputEvent then
                             if InfiniteComboGlobal then
                                 local windowLength = InfiniteWindowGlobal
-                                local currentTick = os.clock()
-                                local activeWindowIndex = math.floor(currentTick / windowLength) % totalActiveCount + 1
+                                local currentTick = Workspace:GetServerTimeNow()
+                                local activeWindowIndex = math.floor(currentTick / windowLength) % TotalBotsGlobal + 1
                                 
-                                if idx == activeWindowIndex then
+                                if BotIndexGlobal == activeWindowIndex then
                                     pcall(function()
                                         inputEvent:FireServer("M1", {
                                             air = false,
@@ -442,7 +438,7 @@ local mainSuccess, mainError = pcall(function()
                 end
                 
                 local baseWaitTime = InfiniteComboGlobal and 0.05 or M1FrequencyGlobal
-                local indexStaggerOffset = InfiniteComboGlobal and 0 or (idx * 0.04)
+                local indexStaggerOffset = InfiniteComboGlobal and 0 or (BotIndexGlobal * 0.04)
                 task.wait(baseWaitTime + indexStaggerOffset) 
             end
         end)
@@ -614,7 +610,6 @@ local mainSuccess, mainError = pcall(function()
         LeftGroupBox:AddLabel('Native Lock Target Keybind: [ Z ]')
         LeftGroupBox:AddDivider()
 
-        -- FOV Control Panel Section
         LeftGroupBox:AddToggle('ShowFOVRingToggle', {
             Text = 'Display Visual FOV Viewer Circle',
             Default = ShowFOVGlobal,
@@ -694,7 +689,6 @@ local mainSuccess, mainError = pcall(function()
 
         ActionGroupBox:AddDivider()
 
-        -- --- CHAT SYSTEM MASTER UI INTERACTION ---
         ActionGroupBox:AddToggle('BotChatSpamToggle', {
             Text = 'Cycle Chat Messages (30s)',
             Default = false,
@@ -708,7 +702,6 @@ local mainSuccess, mainError = pcall(function()
 
         LeftGroupBox:AddDivider()
 
-        -- --- MOVEMENT CHECKBOXES WITH INTEGRATED KEYBINDS ---
         local function ClearOtherMovementToggles(activeName)
             for name, obj in pairs(Toggles) do
                 if name ~= activeName and obj.Value == true then
@@ -884,13 +877,10 @@ local mainSuccess, mainError = pcall(function()
         RightGroupBox:AddDivider()
         local TrackerLabel = RightGroupBox:AddLabel('Active Bots Connected: 0')
         
-        -- --- BOT ROW LABELS MATRIX POOL ---
-        -- Pre-allocates up to 15 completely distinct element rows so they can never overlap layout positions
         local BotLabelsPool = {}
         for idx = 1, 15 do
             BotLabelsPool[idx] = RightGroupBox:AddLabel('')
         end
-        -- ----------------------------------
 
         task.spawn(function()
             while Running do
@@ -915,13 +905,11 @@ local mainSuccess, mainError = pcall(function()
                     
                     TrackerLabel:SetText('Active Bots Connected: ' .. tostring(activeCount))
                     
-                    -- Dynamic allocation across pre-built label lines
                     for idx = 1, 15 do
                         local nameForThisLine = connectedNames[idx]
                         if nameForThisLine then
                             BotLabelsPool[idx]:SetText(nameForThisLine)
                         else
-                            -- Clear out unused label slot frames entirely
                             if idx == 1 and activeCount == 0 then
                                 BotLabelsPool[idx]:SetText('None connected')
                             else
@@ -933,7 +921,6 @@ local mainSuccess, mainError = pcall(function()
             end
         end)
 
-        -- --- SETTINGS TAB CONFIGURATION ---
         local SettingLeftBox = Tabs.Settings:AddLeftGroupbox('Utility')
         local SettingRightBox = Tabs.Settings:AddRightGroupbox('Menu Settings')
         
@@ -946,7 +933,6 @@ local mainSuccess, mainError = pcall(function()
             end
         })
 
-        -- Setup Theme and Configuration Savers via Linoria Managers
         ThemeManager:SetLibrary(Library)
         SaveManager:SetLibrary(Library)
         
