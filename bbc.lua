@@ -105,7 +105,8 @@ end
 local ConfigFileName = "AutomatorConfig_Tycoon.json"
 local SavedConfig = {
     AutoCollect = false,
-    AutoBuyDismantle = false,
+    AutoBuy = false,
+    AutoDismantle = false,
     AutoCrate = false,
     AutoPlaytime = false,
     CrateType = "Elite",
@@ -625,13 +626,14 @@ local lastObservedCash = 0
 local absoluteLastKnownShards = 0
 
 local collectingActive = SavedConfig.AutoCollect
-local vendorActive     = SavedConfig.AutoBuyDismantle
+local buyActive         = SavedConfig.AutoBuy
+local dismantleActive   = SavedConfig.AutoDismantle
 local crateActive      = SavedConfig.AutoCrate
 local rewardActive     = SavedConfig.AutoPlaytime
 
 local Window = Framework:CreateWindow({
     Title = "Automator Controller",
-    Size = {290, 630},
+    Size = {290, 670}, -- Expanded size dynamically to fit the new button safely
     Position = {0.05, 0.25},
     Footer = "PRESS [N] TO TOGGLE INTERFACE"
 })
@@ -858,14 +860,28 @@ AutomatorTab:AddToggle({
     end
 })
 
+-- SPLIT TOGGLE 1: BUY
 AutomatorTab:AddToggle({
-    Text = "Auto Buy/Dismantle",
-    Default = SavedConfig.AutoBuyDismantle,
-    OnText = "Auto Buy/Dismantle: ON",
-    OffText = "Auto Buy/Dismantle: OFF",
+    Text = "Auto Buy Shop",
+    Default = SavedConfig.AutoBuy,
+    OnText = "Auto Buy Shop: ON",
+    OffText = "Auto Buy Shop: OFF",
     Callback = function(state)
-        vendorActive = state
-        SavedConfig.AutoBuyDismantle = state
+        buyActive = state
+        SavedConfig.AutoBuy = state
+        saveSettings()
+    end
+})
+
+-- SPLIT TOGGLE 2: DISMANTLE
+AutomatorTab:AddToggle({
+    Text = "Auto Dismantle",
+    Default = SavedConfig.AutoDismantle,
+    OnText = "Auto Dismantle: ON",
+    OffText = "Auto Dismantle: OFF",
+    Callback = function(state)
+        dismantleActive = state
+        SavedConfig.AutoDismantle = state
         saveSettings()
     end
 })
@@ -1001,7 +1017,8 @@ AutomatorTab:AddButton({
         btn:SetState("loading", "Terminating...")
         running = false
         collectingActive = false
-        vendorActive = false
+        buyActive = false
+        dismantleActive = false
         crateActive = false
         rewardActive = false
         task.wait(0.4)
@@ -1043,15 +1060,11 @@ task.spawn(function()
     end
 end)
 
--- MAX SPEED OPTIMIZED SHOP LOOP
+-- MAX SPEED INDEPENDENT VENDOR SHOP LOOPS
 task.spawn(function()
     local PurchaseEvent = ReplicatedStorage:WaitForChild("Shared")
         :WaitForChild("Resources"):WaitForChild("VendorResources")
         :WaitForChild("Remotes"):WaitForChild("PurchaseStructure")
-
-    local DismantleEvent = ReplicatedStorage:WaitForChild("Shared")
-        :WaitForChild("Resources"):WaitForChild("VendorResources")
-        :WaitForChild("Remotes"):WaitForChild("DismantleMythicStructure")
 
     local structuresToBuy = {
         "Corporate Campus", "Luxury Resort", "Semiconductor Plant", "Cookie Stand",
@@ -1059,6 +1072,27 @@ task.spawn(function()
         "Heavy Weapons Depot", "Naval Shipyard", "ATC Tower", "Field Tent",
         "Regional Depot", "Cargo Dockyard", "Advanced Supply Depot",
     }
+
+    while true do
+        if not running then break end
+        if buyActive and PurchaseEvent then
+            for _, name in ipairs(structuresToBuy) do
+                if not buyActive then break end
+                task.spawn(function()
+                    PurchaseEvent:FireServer(name)
+                end)
+            end
+            delayTimer(0.1)
+        else
+            delayTimer(0.5)
+        end
+    end
+end)
+
+task.spawn(function()
+    local DismantleEvent = ReplicatedStorage:WaitForChild("Shared")
+        :WaitForChild("Resources"):WaitForChild("VendorResources")
+        :WaitForChild("Remotes"):WaitForChild("DismantleMythicStructure")
 
     local structuresToDismantle = {
         "Cookie Stand", "Shield Generator", "Behemoth Fortress", "Officer Quarters",
@@ -1068,24 +1102,13 @@ task.spawn(function()
 
     while true do
         if not running then break end
-        if vendorActive and PurchaseEvent and DismantleEvent then
-            -- Simultaneously fire all purchase remotes using lightweight threads
-            for _, name in ipairs(structuresToBuy) do
-                if not vendorActive then break end
-                task.spawn(function()
-                    PurchaseEvent:FireServer(name)
-                end)
-            end
-            
-            -- Simultaneously fire all dismantle remotes using lightweight threads
+        if dismantleActive and DismantleEvent then
             for _, name in ipairs(structuresToDismantle) do
-                if not vendorActive then break end
+                if not dismantleActive then break end
                 task.spawn(function()
                     DismantleEvent:FireServer(name, 1)
                 end)
             end
-            
-            -- Rapid restart cycle delay (Down from 5s to 0.1s)
             delayTimer(0.1)
         else
             delayTimer(0.5)
