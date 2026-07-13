@@ -974,7 +974,7 @@ task.spawn(function()
     local structuresToDismantle = {
         "Cookie Stand", "Shield Generator", "Behemoth Fortress", "Officer Quarters",
         "Fleet Command", "Heavy Weapons Depot", "Naval Shipyard", "ATC Tower", "Field Tent",
-        "Cobra Helipad", "Tank Warehouse"
+        "Cobra Helipad", "Tank Warehouse","Energy Node"
     }
 
     while true do
