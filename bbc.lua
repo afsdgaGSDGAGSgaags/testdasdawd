@@ -108,6 +108,9 @@ local SavedConfig = {
     AutoBuyDismantle = false,
     AutoCrate = false,
     AutoPlaytime = false,
+    CrateType = "Elite",
+    CrateMinCashRequirement = 5000000000,
+    CrateMinCashText = "5B",
     ReconnectCount = 0,
     TotalSessionEarned = 0,
     TotalSessionTime = 0
@@ -136,7 +139,6 @@ end
 
 loadSettings()
 
--- Helper function to ensure game's batch-open mechanic is synchronized
 local function syncTenCrateState()
     local LootCrateRemotes = ReplicatedStorage:FindFirstChild("Shared")
         and ReplicatedStorage.Shared:FindFirstChild("Resources")
@@ -478,6 +480,55 @@ function Framework:CreateWindow(config)
             return handle
         end
 
+        function Tab:AddInputField(titleText, defaultText, callback)
+            self._order = self._order + 1
+
+            local container = Instance.new("Frame")
+            container.Parent = self._container
+            container.BackgroundColor3 = theme.surface
+            container.BorderSizePixel = 0
+            container.Size = UDim2.new(1, 0, 0, 36)
+            container.LayoutOrder = self._order
+            corner(container, 6)
+            local containerStroke = stroke(container, theme.border, 1)
+
+            local label = Instance.new("TextLabel")
+            label.Parent = container
+            label.BackgroundTransparency = 1
+            label.Position = UDim2.new(0, 12, 0, 0)
+            label.Size = UDim2.new(0.5, -12, 1, 0)
+            label.Font = Enum.Font.GothamMedium
+            label.Text = titleText
+            label.TextColor3 = theme.textSecondary
+            label.TextSize = 11
+            label.TextXAlignment = Enum.TextXAlignment.Left
+
+            local box = Instance.new("TextBox")
+            box.Parent = container
+            box.BackgroundTransparency = 1
+            box.Position = UDim2.new(0.5, 0, 0, 0)
+            box.Size = UDim2.new(0.5, -12, 1, 0)
+            box.Font = Enum.Font.GothamBold
+            box.Text = defaultText or ""
+            box.TextColor3 = theme.accent
+            box.TextSize = 11
+            box.TextXAlignment = Enum.TextXAlignment.Right
+            box.ClearTextOnFocus = false
+
+            box.Focused:Connect(function()
+                tween(containerStroke, {Color = theme.borderActive})
+            end)
+
+            box.FocusLost:Connect(function(enterPressed)
+                tween(containerStroke, {Color = theme.border})
+                if callback then callback(box.Text) end
+            end)
+
+            local handle = {}
+            function handle:SetText(t) box.Text = t end
+            return handle
+        end
+
         function Tab:AddLabel(text, cfg)
             cfg = cfg or {}
             self._order = self._order + 1
@@ -580,7 +631,7 @@ local rewardActive     = SavedConfig.AutoPlaytime
 
 local Window = Framework:CreateWindow({
     Title = "Automator Controller",
-    Size = {290, 590},
+    Size = {290, 630}, -- Slightly expanded height to cleanly hold the text box
     Position = {0.05, 0.25},
     Footer = "PRESS [N] TO TOGGLE INTERFACE"
 })
@@ -820,10 +871,10 @@ AutomatorTab:AddToggle({
 })
 
 AutomatorTab:AddToggle({
-    Text = "Auto Crate (5B)",
+    Text = "Auto Crate Loop",
     Default = SavedConfig.AutoCrate,
-    OnText = "Auto Crate (5B): ON",
-    OffText = "Auto Crate (5B): OFF",
+    OnText = "Auto Crate Loop: ON",
+    OffText = "Auto Crate Loop: OFF",
     Callback = function(state)
         crateActive = state
         SavedConfig.AutoCrate = state
@@ -834,6 +885,40 @@ AutomatorTab:AddToggle({
         end
     end
 })
+
+local crateTypes = {"Elite", "Titan", "Decorative", "Standard", "Golden"}
+local function getNextCrateType(current)
+    for i, v in ipairs(crateTypes) do
+        if v == current then
+            return crateTypes[i % #crateTypes + 1]
+        end
+    end
+    return "Elite"
+end
+
+local crateTypeBtn
+crateTypeBtn = AutomatorTab:AddButton({
+    Text = "Crate Selected: " .. (SavedConfig.CrateType or "Elite"),
+    DotColor = DEFAULT_THEME.info,
+    Callback = function(btn)
+        local nextType = getNextCrateType(SavedConfig.CrateType or "Elite")
+        SavedConfig.CrateType = nextType
+        saveSettings()
+        btn:SetState("reset", "Crate Selected: " .. nextType)
+    end
+})
+
+-- MONEY INPUT FIELD
+AutomatorTab:AddInputField("Min Cash To Buy", SavedConfig.CrateMinCashText or "5B", function(text)
+    if text and text ~= "" then
+        local parsedVal = parseCashString(text)
+        if parsedVal >= 0 then
+            SavedConfig.CrateMinCashRequirement = parsedVal
+            SavedConfig.CrateMinCashText = text
+            saveSettings()
+        end
+    end
+end)
 
 AutomatorTab:AddToggle({
     Text = "Auto Playtime",
@@ -974,7 +1059,7 @@ task.spawn(function()
     local structuresToDismantle = {
         "Cookie Stand", "Shield Generator", "Behemoth Fortress", "Officer Quarters",
         "Fleet Command", "Heavy Weapons Depot", "Naval Shipyard", "ATC Tower", "Field Tent",
-        "Cobra Helipad", "Tank Warehouse","Energy Node"
+        "Cobra Helipad", "Tank Warehouse"
     }
 
     while true do
@@ -1016,8 +1101,10 @@ task.spawn(function()
                 currentCash = parseCashString(rawText)
             end
 
-            if currentCash >= 5000000000 then
-                CrateEvent:FireServer("Elite", 10000)
+            -- Fires if your money is above or equal to your custom amount
+            local targetMin = SavedConfig.CrateMinCashRequirement or 5000000000
+            if currentCash >= targetMin then
+                CrateEvent:FireServer(SavedConfig.CrateType or "Elite", 10000)
                 delayTimer(5)
             else
                 delayTimer(1)
