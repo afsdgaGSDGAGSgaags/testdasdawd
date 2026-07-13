@@ -108,9 +108,9 @@ local SavedConfig = {
     AutoBuyDismantle = false,
     AutoCrate = false,
     AutoPlaytime = false,
-    CrateType = "Elite",
-    CrateMinCashRequirement = 5000000000,
-    CrateMinCashText = "5B",
+    CrateType = "Elite",               -- Saved to Config
+    CrateMinCashRequirement = 5000000000, -- Saved to Config
+    CrateMinCashText = "5B",           -- Saved to Config
     ReconnectCount = 0,
     TotalSessionEarned = 0,
     TotalSessionTime = 0
@@ -631,7 +631,7 @@ local rewardActive     = SavedConfig.AutoPlaytime
 
 local Window = Framework:CreateWindow({
     Title = "Automator Controller",
-    Size = {290, 630}, -- Slightly expanded height to cleanly hold the text box
+    Size = {290, 630}, -- Expanded frame to cleanly fit the live input box
     Position = {0.05, 0.25},
     Footer = "PRESS [N] TO TOGGLE INTERFACE"
 })
@@ -903,19 +903,19 @@ crateTypeBtn = AutomatorTab:AddButton({
     Callback = function(btn)
         local nextType = getNextCrateType(SavedConfig.CrateType or "Elite")
         SavedConfig.CrateType = nextType
-        saveSettings()
+        saveSettings() -- SAVES Crate Type choice to json
         btn:SetState("reset", "Crate Selected: " .. nextType)
     end
 })
 
--- MONEY INPUT FIELD
+-- MONEY REQUIREMENT INPUT FIELD
 AutomatorTab:AddInputField("Min Cash To Buy", SavedConfig.CrateMinCashText or "5B", function(text)
     if text and text ~= "" then
         local parsedVal = parseCashString(text)
         if parsedVal >= 0 then
             SavedConfig.CrateMinCashRequirement = parsedVal
             SavedConfig.CrateMinCashText = text
-            saveSettings()
+            saveSettings() -- SAVES parsed custom value and input text to json
         end
     end
 end)
@@ -1098,12 +1098,12 @@ task.spawn(function()
             local cashAmount = hud and hud:WaitForChild("cashFrame"):WaitForChild("cashAmount")
             if cashAmount then
                 local rawText = cashAmount.ContentText ~= "" and cashAmount.ContentText or cashAmount.Text
-                currentCash = parseCashString(rawText)
+                currentLiveCash = parseCashString(rawText)
             end
 
-            -- Fires if your money is above or equal to your custom amount
+            -- Pulls dynamic value and choice straight from your configuration settings!
             local targetMin = SavedConfig.CrateMinCashRequirement or 5000000000
-            if currentCash >= targetMin then
+            if currentLiveCash >= targetMin then
                 CrateEvent:FireServer(SavedConfig.CrateType or "Elite", 10000)
                 delayTimer(5)
             else
