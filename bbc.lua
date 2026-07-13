@@ -264,7 +264,7 @@ function Framework:CreateWindow(config)
     footer.TextSize = 10
     footer.TextXAlignment = Enum.TextXAlignment.Left
 
-    mainFrame.Size = UDim2.new(0, width, 0, 0)
+    mainFrame.Size = UDim2.new(0, width, 0, height)
     mainFrame.BackgroundTransparency = 1
     shadow.ImageTransparency = 1
 
@@ -567,7 +567,7 @@ end
 -- SYSTEM CONFIGURATION
 -- ==========================================
 local running = true
-local DiscordWebhookURL = "https://discord.com/api/webhooks/1526157590445166643/C8p3HqSdBMMJeJiuwkyHYvbK_2azl_eVAPaIOkQln0_U2Qx9xckIPU0HGmtUu9OhYRG0" -- Paste your Webhook URL string here
+local DiscordWebhookURL = "https://discord.com/api/webhooks/1526157590445166643/C8p3HqSdBMMJeJiuwkyHYvbK_2azl_eVAPaIOkQln0_U2Qx9xckIPU0HGmtUu9OhYRG0"
 
 local initialCashValue = nil
 local lastObservedCash = 0
@@ -580,12 +580,11 @@ local rewardActive     = SavedConfig.AutoPlaytime
 
 local Window = Framework:CreateWindow({
     Title = "Automator Controller",
-    Size = {290, 590}, -- Height bumped slightly to seamlessly fit the new dashboard card
+    Size = {290, 590},
     Position = {0.05, 0.25},
     Footer = "PRESS [N] TO TOGGLE INTERFACE"
 })
 
--- FORCED SYNCHRONIZATION: Instantly fires setup whenever the script runs
 task.spawn(function()
     delayTimer(1)
     syncTenCrateState()
@@ -604,7 +603,6 @@ task.spawn(function()
     end)
 end)
 
--- Helper function to issue webhook dispatches safely
 local function postWebhookUpdate(isTestMsg)
     if not DiscordWebhookURL or DiscordWebhookURL == "" or DiscordWebhookURL == "YOUR_WEBHOOK_URL_HERE" then 
         return false, "No URL Configured" 
@@ -615,7 +613,6 @@ local function postWebhookUpdate(isTestMsg)
     local mins = math.floor((totalSecs % 3600) / 60)
     local formattedTimeStr = string.format("%dh %dm", hours, mins)
 
-    -- Math to calculate Hourly Rates for Discord webhook payload
     local cashPerHour = 0
     if totalSecs > 0 then
         cashPerHour = math.floor(((SavedConfig.TotalSessionEarned or 0) / totalSecs) * 3600)
@@ -624,12 +621,12 @@ local function postWebhookUpdate(isTestMsg)
     local data = {
         ["embeds"] = {{
             ["title"] = isTestMsg and "Test" or "report blud",
-            ["color"] = isTestMsg and 15844367 or 527196, -- Gold for tests, Emerald for system logs
+            ["color"] = isTestMsg and 15844367 or 527196,
             ["fields"] = {
                 {["name"] = "Mythic Shards", ["value"] = "```" .. formatNumber(absoluteLastKnownShards) .. "```", ["inline"] = true},
                 {["name"] = "Total Server Reconnects", ["value"] = "```" .. tostring(SavedConfig.ReconnectCount or 0) .. "```", ["inline"] = true},
                 {["name"] = "Total Money Earned )", ["value"] = "```$" .. formatNumber(SavedConfig.TotalSessionEarned or 0) .. "```", ["inline"] = false},
-                {["name"] = "Money Per Hour", ["value"] = "```$" .. formatNumber(cashPerHour) .. "/hr```", ["inline"] = true}, -- NEW WEBHOOK FIELD
+                {["name"] = "Money Per Hour", ["value"] = "```$" .. formatNumber(cashPerHour) .. "/hr```", ["inline"] = true},
                 {["name"] = "Playtime", ["value"] = "```" .. formattedTimeStr .. "```", ["inline"] = true}
             },
             ["footer"] = {["text"] = isTestMsg and "Webhook Connection verified successfully." or "Automator Engine Live Log Update"},
@@ -659,8 +656,9 @@ local DashboardTab = Window:CreateTab("Dashboard")
 DashboardTab:AddLabel("LIVE STATISTICS", {Bold = true, Color = DEFAULT_THEME.accent})
 DashboardTab:AddDivider()
 
+-- Fixed tags: Changed the broken emoji strings to clean text headers
 local cashCard = DashboardTab:AddDisplayCard("Total Money Earned (Saved)", "$0", DEFAULT_THEME.accent)
-local incomeCard = DashboardTab:AddDisplayCard("Money Per Hour", "$0", DEFAULT_THEME.accent) -- NEW DASHBOARD CARD
+local incomeCard = DashboardTab:AddDisplayCard("Money Per Hour", "$0", DEFAULT_THEME.accent)
 local shardCard = DashboardTab:AddDisplayCard("Mythic Shards", "0", DEFAULT_THEME.info)
 local sessionCard = DashboardTab:AddDisplayCard("Total Playtime (Saved)", "00h 00m 00s", DEFAULT_THEME.warning)
 local reconnectCard = DashboardTab:AddDisplayCard("Total Reconnects (Saved)", tostring(SavedConfig.ReconnectCount), DEFAULT_THEME.danger)
@@ -693,7 +691,6 @@ task.spawn(function()
     end)
 end)
 
--- Dashboard calculation & UI rendering loop
 task.spawn(function()
     while running do
         pcall(function()
@@ -724,15 +721,14 @@ task.spawn(function()
                 lastObservedCash = currentLiveCash
             end
             
-            cashCard:Update("跳 $" .. formatNumber(SavedConfig.TotalSessionEarned))
+            cashCard:Update("$" .. formatNumber(SavedConfig.TotalSessionEarned))
 
-            -- Live math tracking for income per hour
             local totalSecs = SavedConfig.TotalSessionTime or 0
             local cashPerHour = 0
             if totalSecs > 0 then
                 cashPerHour = math.floor(((SavedConfig.TotalSessionEarned or 0) / totalSecs) * 3600)
             end
-            incomeCard:Update("跳 $" .. formatNumber(cashPerHour) .. " / hr") -- Updates UI Card Live
+            incomeCard:Update("$" .. formatNumber(cashPerHour) .. " / hr")
 
             local parsedShardsValue = nil
             local stats = LocalPlayer:FindFirstChild("leaderstats") or LocalPlayer:FindFirstChild("ProfileData") or LocalPlayer:FindFirstChild("skyblock")
@@ -762,17 +758,16 @@ task.spawn(function()
                 absoluteLastKnownShards = parsedShardsValue
             end
             
-            shardCard:Update("虫 " .. formatNumber(absoluteLastKnownShards))
+            shardCard:Update(formatNumber(absoluteLastKnownShards))
         end)
 
-        -- Persistent time math ticking
         SavedConfig.TotalSessionTime = (SavedConfig.TotalSessionTime or 0) + 1
         
         local totalSecs = SavedConfig.TotalSessionTime
         local hours = math.floor(totalSecs / 3600)
         local mins = math.floor((totalSecs % 3600) / 60)
         local secs = totalSecs % 60
-        sessionCard:Update(string.format("竢ｳ %02dh %02dm %02ds", hours, mins, secs))
+        sessionCard:Update(string.format("%02dh %02dm %02ds", hours, mins, secs))
 
         if totalSecs % 5 == 0 then
             saveSettings()
@@ -801,7 +796,6 @@ local AutomatorTab = Window:CreateTab("Automator")
 AutomatorTab:AddLabel("PLOT SYSTEM CONTROLS", {Bold = true, Color = DEFAULT_THEME.accent})
 AutomatorTab:AddDivider()
 
--- 1. Auto Collect Configuration
 AutomatorTab:AddToggle({
     Text = "Auto Collect",
     Default = SavedConfig.AutoCollect,
@@ -814,7 +808,6 @@ AutomatorTab:AddToggle({
     end
 })
 
--- 2. Auto Buy/Dismantle Configuration
 AutomatorTab:AddToggle({
     Text = "Auto Buy/Dismantle",
     Default = SavedConfig.AutoBuyDismantle,
@@ -827,7 +820,6 @@ AutomatorTab:AddToggle({
     end
 })
 
--- 3. Auto Crate Configuration 
 AutomatorTab:AddToggle({
     Text = "Auto Crate (5B)",
     Default = SavedConfig.AutoCrate,
@@ -844,7 +836,6 @@ AutomatorTab:AddToggle({
     end
 })
 
--- 4. Auto Playtime Configuration
 AutomatorTab:AddToggle({
     Text = "Auto Playtime",
     Default = SavedConfig.AutoPlaytime,
@@ -860,7 +851,6 @@ AutomatorTab:AddToggle({
 AutomatorTab:AddDivider()
 AutomatorTab:AddLabel("UTILITY HOOKS")
 
--- Completely wipes everything back to 0 per your prompt rules
 AutomatorTab:AddButton({
     Text = "Reset All Saved Trackers to 0",
     DotColor = DEFAULT_THEME.warning,
@@ -871,9 +861,9 @@ AutomatorTab:AddButton({
         saveSettings()
         
         reconnectCard:Update("0")
-        cashCard:Update("跳 $0")
-        incomeCard:Update("跳 $0 / hr") -- Clears income text tracker
-        sessionCard:Update("竢ｳ 00h 00m 00s")
+        cashCard:Update("$0")
+        incomeCard:Update("$0 / hr")
+        sessionCard:Update("00h 00m 00s")
         
         btn:SetState("success", "Reset Completed!")
         task.wait(1.5)
@@ -881,7 +871,6 @@ AutomatorTab:AddButton({
     end
 })
 
--- DISCORD WEBHOOK TEST ACTION BUTTON
 AutomatorTab:AddButton({
     Text = "Test Discord Webhook Now",
     DotColor = DEFAULT_THEME.accent,
@@ -937,7 +926,6 @@ AutomatorTab:AddButton({
 -- BACKGROUND AUTOMATION ENGINE THREADS
 -- ==========================================
 
--- Loop Thread 1: Auto Collector
 task.spawn(function()
     local Shared = ReplicatedStorage:WaitForChild("Shared", 5)
     local Resources = Shared and Shared:WaitForChild("Resources", 5)
@@ -968,7 +956,6 @@ task.spawn(function()
     end
 end)
 
--- Loop Thread 2: Auto Buy & Dismantle
 task.spawn(function()
     local PurchaseEvent = ReplicatedStorage:WaitForChild("Shared")
         :WaitForChild("Resources"):WaitForChild("VendorResources")
@@ -1012,7 +999,6 @@ task.spawn(function()
     end
 end)
 
--- Loop Thread 3: Auto Loot Crate (5 Billion Requirement Logic)
 task.spawn(function()
     local LootCrateRemotes = ReplicatedStorage:WaitForChild("Shared")
         :WaitForChild("Resources"):WaitForChild("LootCrateResources")
@@ -1043,7 +1029,6 @@ task.spawn(function()
     end
 end)
 
--- Loop Thread 4: Auto Claim Playtime Rewards
 task.spawn(function()
     local RewardEvent = ReplicatedStorage:WaitForChild("Shared")
         :WaitForChild("Resources"):WaitForChild("RewardResources")
