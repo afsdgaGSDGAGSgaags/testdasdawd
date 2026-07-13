@@ -1,0 +1,972 @@
+-- --- AUTO-REFRESH MATRIX (EXECUTE TWICE PROTECTOR) ---
+if _G.CancelABAContoller then
+    local status, err = pcall(function() 
+        _G.CancelABAContoller() 
+    end)
+    if not status then 
+        warn("[Cluster Watchdog]: Error forcing clean reset -> " .. tostring(err))
+    else
+        print("[Cluster Watchdog]: Previous session active script instance terminated. Reloading...")
+    end
+    task.wait(0.2)
+end
+
+-- --- CORE CONFIGURATION ---
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
+local Workspace = game:GetService("Workspace")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local UserInputService = game:GetService("UserInputService")
+local TextChatService = game:GetService("TextChatService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+
+-- Whitelist for Controller / Masters (Manual entries here bypass bot logic)
+local Whitelist = {
+    ["wolfking321"] = true, 
+    ["nonvertwo"] = true
+}
+local IsMaster = Whitelist[LocalPlayer.Name:lower()] ~= nil
+
+-- Global tracking state
+local AttachConnection = nil
+local InputConnection = nil
+local FOVConnection = nil
+local AntiAFKConnection = nil
+local Running = true
+local SharedFileName = "aba_bot_cluster.txt"
+local MasterConfigFileName = "aba_master_config.txt"
+
+-- Client Runtime Tracking States
+local AutoM1ActiveGlobal = false 
+local InfiniteComboGlobal = false 
+local ActiveCommandGlobal = "STOP"
+local MoveTogglesGlobal = { false, false, false, false }
+local M1FrequencyGlobal = 0.22
+local InfiniteWindowGlobal = 1.4
+local CurrentTargetGlobal = ""
+local ChatSpamActiveGlobal = false
+
+-- Chat Cycle Phrases List
+local ChatPhrases = {
+    "YOU STOOD NO CHANCE.",
+    "WELCOME TO THE LOBBY.",
+    "UNINSTALL SPEEDRUN ANY%",
+    "NICE TRY, BUD.",
+    "YOU JUST FED THE LEADERBOARD.",
+    "TARGET ELIMINATED.",
+    "YOUR HP LEFT THE CHAT.",
+    "ERROR: SURVIVAL.EXE HAS STOPPED WORKING.",
+    "REST IN PIXELS.",
+    "YOU REALLY THOUGHT THAT YOU, OUT OF ALL PEOPLE, COULD BEAT ME?!",
+    "GG... FOR ME",
+    "BRO GOT DELETED",
+    "THAT WAS EMBARRASSING.",
+    "YOU GOT READ LIKE A BOOK."
+}
+
+-- FOV Configs (Master Only)
+local FOVRadiusGlobal = 150
+local ShowFOVGlobal = true
+
+-- Drawing Object for FOV Ring
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Color = Color3.fromRGB(255, 0, 0)
+FOVCircle.Thickness = 1.5
+FOVCircle.NumSides = 64
+FOVCircle.Filled = false
+FOVCircle.Visible = false
+
+-- Key Mapping Profile
+local SlotKeyMap = {
+    [1] = Enum.KeyCode.One,
+    [2] = Enum.KeyCode.Two,
+    [3] = Enum.KeyCode.Three,
+    [4] = Enum.KeyCode.Four
+}
+
+-- --- SAFE FILE UTILITIES ---
+local function GetClusterData()
+    local success, content = pcall(function() return readfile(SharedFileName) end)
+    if success and content and content ~= "" then
+        local ok, data = pcall(function() return HttpService:JSONDecode(content) end)
+        if ok and data then return data end
+    end
+    return { Command = "STOP", Target = "", OrbitSpeed = 22, OrbitRadius = 6, AutoM1 = false, InfiniteCombo = false, M1Frequency = 0.22, InfiniteWindow = 1.4, Moves = {false, false, false, false}, ChatSpam = false, ActiveBots = {} }
+end
+
+local function SaveClusterData(data)
+    pcall(function()
+        writefile(SharedFileName, HttpService:JSONEncode(data))
+    end)
+end
+
+-- --- MASTER SAVED SETTINGS UTILITIES ---
+local function LoadMasterConfig()
+    local success, content = pcall(function() return readfile(MasterConfigFileName) end)
+    if success and content and content ~= "" then
+        local ok, data = pcall(function() return HttpService:JSONDecode(content) end)
+        if ok and data then 
+            return data 
+        end
+    end
+    return { SavedSpeed = 22, SavedRadius = 6, SavedFreq = 0.22, SavedWindow = 1.4, SavedFOV = 150, SavedShowFOV = true }
+end
+
+local function SaveMasterConfig(speed, radius, freq, win, fov, showFov)
+    pcall(function()
+        local configData = { SavedSpeed = speed, SavedRadius = radius, SavedFreq = freq, SavedWindow = win, SavedFOV = fov, SavedShowFOV = showFov }
+        writefile(MasterConfigFileName, HttpService:JSONEncode(configData))
+    end)
+end
+
+-- --- ANTI-AFK ENGINE ---
+local function SetAntiAFKState(enabled)
+    if AntiAFKConnection then 
+        AntiAFKConnection:Disconnect() 
+        AntiAFKConnection = nil 
+    end
+    
+    if enabled then
+        AntiAFKConnection = LocalPlayer.Idled:Connect(function()
+            local virtualUser = game:GetService("VirtualUser")
+            virtualUser:CaptureController()
+            virtualUser:ClickButton2(Vector2.new(0, 0))
+        end)
+    end
+end
+
+-- --- MAIN EXECUTION WRAPPER ---
+local mainSuccess, mainError = pcall(function()
+    
+    -- --- BOT REGISTRATION ---
+    if not IsMaster then
+        task.spawn(function()
+             while Running do
+                local data = GetClusterData()
+                data.ActiveBots = data.ActiveBots or {}
+                data.ActiveBots[LocalPlayer.Name] = os.time()
+                SaveClusterData(data)
+                task.wait(2 + math.random(0, 5) * 0.2)
+            end
+        end)
+    end
+
+    -- --- MOVEMENT ENGINES ---
+    local function StopAllActions()
+        if AttachConnection then AttachConnection:Disconnect(); AttachConnection = nil end
+        pcall(function()
+            Camera.CameraType = Enum.CameraType.Custom
+            if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+                local hum = LocalPlayer.Character.Humanoid
+                hum.AutoRotate = true
+                hum.Jump = false
+            end
+        end)
+    end
+
+    local function AttachToPlayer()
+        if IsMaster then return end 
+        StopAllActions()
+        
+        AttachConnection = RunService.RenderStepped:Connect(function()
+            local targetName = CurrentTargetGlobal
+            local target = Players:FindFirstChild(targetName)
+            if not target then return end
+            
+            if target.Character and target.Character:FindFirstChild("HumanoidRootPart") and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                local targetHRP = target.Character.HumanoidRootPart
+                LocalPlayer.Character.HumanoidRootPart.CFrame = targetHRP.CFrame * CFrame.new(0, 0, 3.5)
+                Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, targetHRP.Position)
+                
+                if AutoM1ActiveGlobal and LocalPlayer.Character:FindFirstChild("Humanoid") then
+                    LocalPlayer.Character.Humanoid.Jump = true
+                end
+            end
+        end)
+    end
+
+    local function TweenToPlayer()
+        if IsMaster then return end 
+        StopAllActions()
+        
+        local currentActiveTween = nil
+        local activeTweenTargetName = ""
+
+        AttachConnection = RunService.RenderStepped:Connect(function()
+            local targetName = CurrentTargetGlobal
+            local target = Players:FindFirstChild(targetName)
+            if not target or not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then return end
+            if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
+
+            local hrp = LocalPlayer.Character.HumanoidRootPart
+            
+            if activeTweenTargetName ~= targetName then
+                if currentActiveTween then currentActiveTween:Cancel() end
+                activeTweenTargetName = targetName
+                
+                local distance = (hrp.Position - target.Character.HumanoidRootPart.Position).Magnitude
+                currentActiveTween = TweenService:Create(hrp, TweenInfo.new(distance / 60, Enum.EasingStyle.Linear), {CFrame = target.Character.HumanoidRootPart.CFrame})
+                currentActiveTween:Play()
+            end
+
+            if AutoM1ActiveGlobal and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+                LocalPlayer.Character.Humanoid.Jump = true
+            end
+        end)
+    end
+
+    local function StartOrbitEngine(speedValue, radiusValue)
+        if IsMaster then return end 
+        StopAllActions()
+
+        local angle = 0
+        AttachConnection = RunService.RenderStepped:Connect(function(dt)
+            local targetName = CurrentTargetGlobal
+            local target = Players:FindFirstChild(targetName)
+            if not target then return end
+
+            if target.Character and target.Character:FindFirstChild("HumanoidRootPart") and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                if LocalPlayer.Character:FindFirstChild("Humanoid") then
+                    local hum = LocalPlayer.Character.Humanoid
+                    hum.AutoRotate = true
+                    if AutoM1ActiveGlobal then
+                        hum.Jump = true
+                    end
+                end
+
+                local botList = {}
+                local data = GetClusterData()
+                if data.ActiveBots then
+                    for bName, timestamp in pairs(data.ActiveBots) do
+                        if os.time() - timestamp < 8 then
+                            table.insert(botList, bName)
+                        end
+                    end
+                end
+                table.sort(botList)
+
+                local botIndex = table.find(botList, LocalPlayer.Name) or 1
+                local totalBots = #botList > 0 and #botList or 1
+        
+                angle = angle + (dt * (speedValue or 22))
+                local spreadAngle = angle + ((botIndex - 1) * (math.pi * 2 / totalBots))
+                
+                local targetHRP = target.Character.HumanoidRootPart
+                local radius = radiusValue or 6
+                
+                local offset = Vector3.new(math.sin(spreadAngle) * radius, 0, math.cos(spreadAngle) * radius)
+                local calculatedPosition = targetHRP.Position + offset
+                
+                LocalPlayer.Character.HumanoidRootPart.CFrame = CFrame.new(calculatedPosition, targetHRP.Position)
+                Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, targetHRP.Position)
+            end
+        end)
+    end
+
+    -- --- BOT BACKGROUND LISTENER & COMBAT ENGINE ---
+    if not IsMaster then
+        local lastCommand = ""
+        local lastTarget = ""
+        local lastSpeed = 22
+        local lastRadius = 6
+        
+        local CachedInputRemote = nil
+
+        local function GetHiddenInputRemote()
+            if CachedInputRemote and CachedInputRemote.Parent ~= nil then
+                return CachedInputRemote
+            end
+            local backpack = LocalPlayer:FindFirstChild("Backpack")
+            local standard = backpack and backpack:FindFirstChild("Input") or (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Input"))
+            if standard then
+                CachedInputRemote = standard
+                return CachedInputRemote
+            end
+            if getnilinstances then
+                for _, object in pairs(getnilinstances()) do
+                    if object.Name == "Input" and object:IsA("RemoteEvent") then
+                        CachedInputRemote = object
+                        return CachedInputRemote
+                    end
+                end
+            end
+            return nil
+        end
+
+        LocalPlayer.CharacterAdded:Connect(function()
+            CachedInputRemote = nil
+        end)
+
+        -- Command Listener Loop
+        task.spawn(function()
+            while Running do
+                local data = GetClusterData()
+                AutoM1ActiveGlobal = data.AutoM1 or false
+                InfiniteComboGlobal = data.InfiniteCombo or false 
+                ActiveCommandGlobal = data.Command or "STOP"
+                MoveTogglesGlobal = data.Moves or {false, false, false, false}
+                M1FrequencyGlobal = data.M1Frequency or 0.22
+                InfiniteWindowGlobal = data.InfiniteWindow or 1.4
+                CurrentTargetGlobal = data.Target or ""
+                ChatSpamActiveGlobal = data.ChatSpam or false
+                
+                if data.Command ~= lastCommand or data.Target ~= lastTarget or data.OrbitSpeed ~= lastSpeed or data.OrbitRadius ~= lastRadius then
+                    lastCommand = data.Command
+                    lastTarget = data.Target
+                    lastSpeed = data.OrbitSpeed
+                    lastRadius = data.OrbitRadius
+                    
+                    if lastCommand == "ATTACH" and lastTarget ~= "" then
+                        AttachToPlayer()
+                    elseif lastCommand == "TWEEN" and lastTarget ~= "" then
+                        TweenToPlayer()
+                    elseif lastCommand == "ORBIT" and lastTarget ~= "" then
+                        StartOrbitEngine(lastSpeed, lastRadius)
+                    elseif lastCommand == "RESPAWN" then
+                        StopAllActions()
+                        if LocalPlayer.Character then
+                            local humanoid = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+                            if humanoid then humanoid.Health = 0 end
+                        end
+                        task.spawn(function()
+                            task.wait(0.5)
+                            local clearData = GetClusterData()
+                            if clearData.Command == "RESPAWN" then
+                                clearData.Command = "STOP"
+                                SaveClusterData(clearData)
+                            end
+                        end)
+                    elseif lastCommand == "STOP" then
+                        StopAllActions()
+                    end
+                end
+                task.wait(0.05)
+            end
+        end)
+        
+        -- --- 30 SECOND CHAT SPAMMER LOOP ---
+        task.spawn(function()
+            local phraseIndex = 1
+            while Running do
+                task.wait(30)
+                if ChatSpamActiveGlobal and #ChatPhrases > 0 then
+                    local message = ChatPhrases[phraseIndex]
+                    
+                    pcall(function()
+                        if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+                            local generalChannel = TextChatService:FindFirstChild("TextChannels") and TextChatService.TextChannels:FindFirstChild("RBXGeneral")
+                            if generalChannel then
+                                generalChannel:SendAsync(message)
+                            end
+                        else
+                            game:GetService("ReplicatedStorage").DefaultChatSystemChatEvents.SayMessageRequest:FireServer(message, "All")
+                        end
+                    end)
+                    
+                    phraseIndex = phraseIndex + 1
+                    if phraseIndex > #ChatPhrases then
+                        phraseIndex = 1
+                    end
+                end
+            end
+        end)
+
+        -- STAGGER-SEQUENCED COMBAT ENGINE
+        task.spawn(function()
+            while Running do
+                local actionAllowed = (ActiveCommandGlobal == "ORBIT" or ActiveCommandGlobal == "ATTACH")
+                
+                local data = GetClusterData()
+                local botList = {}
+                if data.ActiveBots then
+                    for bName, _ in pairs(data.ActiveBots) do table.insert(botList, bName) end
+                end
+                table.sort(botList)
+  
+                local idx = table.find(botList, LocalPlayer.Name) or 1
+                local totalActiveCount = #botList > 0 and #botList or 1
+                
+                if CurrentTargetGlobal and CurrentTargetGlobal ~= "" and actionAllowed then
+                    local target = Players:FindFirstChild(CurrentTargetGlobal)
+                    local inputEvent = GetHiddenInputRemote()
+                    
+                    if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
+                        local targetHRP = target.Character.HumanoidRootPart
+                        
+                        -- Infinite Combo / Auto M1 Handler Pass
+                        if AutoM1ActiveGlobal and inputEvent then
+                            if InfiniteComboGlobal then
+                                local windowLength = InfiniteWindowGlobal
+                                local currentTick = os.clock()
+                                local activeWindowIndex = math.floor(currentTick / windowLength) % totalActiveCount + 1
+                                
+                                if idx == activeWindowIndex then
+                                    pcall(function()
+                                        inputEvent:FireServer("M1", {
+                                            air = false,
+                                            skeyreal = false,
+                                            skeydown = true,
+                                            mousehit = targetHRP.CFrame,
+                                            md = Vector3.new(0, 0, 0)
+                                        })
+                                    end)
+                                end
+                            else
+                                pcall(function()
+                                    inputEvent:FireServer("M1", {
+                                        air = false,
+                                        skeyreal = false,
+                                        skeydown = true,
+                                        mousehit = targetHRP.CFrame,
+                                        md = Vector3.new(0, 0, 0)
+                                    })
+                                end)
+                            end
+                        end
+                        
+                        -- Hardware Ability Loop Pass
+                        for moveIndex = 1, 4 do
+                            if MoveTogglesGlobal[moveIndex] then
+                                local TargetKey = SlotKeyMap[moveIndex]
+                                pcall(function()
+                                    VirtualInputManager:SendKeyEvent(true, TargetKey, false, game)
+                                    task.wait(0.02)
+                                    VirtualInputManager:SendKeyEvent(false, TargetKey, false, game)
+                                end)
+                            end
+                        end
+                    end
+                end
+                
+                local baseWaitTime = InfiniteComboGlobal and 0.05 or M1FrequencyGlobal
+                local indexStaggerOffset = InfiniteComboGlobal and 0 or (idx * 0.04)
+                task.wait(baseWaitTime + indexStaggerOffset) 
+            end
+        end)
+        
+        _G.CancelABAContoller = function()
+            Running = false
+            StopAllActions()
+            SetAntiAFKState(false)
+            local data = GetClusterData()
+            if data.ActiveBots then
+                data.ActiveBots[LocalPlayer.Name] = nil
+            end
+            SaveClusterData(data)
+        end
+    end
+
+    -- --- MASTER MAIN USER INTERFACE ---
+    if IsMaster then
+        local masterSettings = LoadMasterConfig()
+        local CurrentOrbitSpeed = masterSettings.SavedSpeed or 22
+        local CurrentOrbitRadius = masterSettings.SavedRadius or 6
+        local CurrentM1Frequency = masterSettings.SavedFreq or 0.22
+        local CurrentInfiniteWindow = masterSettings.SavedWindow or 1.4
+        FOVRadiusGlobal = masterSettings.SavedFOV or 150
+        ShowFOVGlobal = masterSettings.SavedShowFOV ~= false
+
+        SaveClusterData({ Command = "STOP", Target = "", OrbitSpeed = CurrentOrbitSpeed, OrbitRadius = CurrentOrbitRadius, AutoM1 = false, InfiniteCombo = false, M1Frequency = CurrentM1Frequency, InfiniteWindow = CurrentInfiniteWindow, Moves = {false, false, false, false}, ChatSpam = false, ActiveBots = {} })
+
+        local repo = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/'
+        local Library = loadstring(game:HttpGet(repo .. 'Library.lua'))()
+        local ThemeManager = loadstring(game:HttpGet(repo .. 'addons/ThemeManager.lua'))()
+        local SaveManager = loadstring(game:HttpGet(repo .. 'addons/SaveManager.lua'))()
+      
+        local Window = Library:CreateWindow({
+            Title = 'aba yslmethod',
+            Center = true,
+            AutoShow = true,
+            TabPadding = 8,
+            MenuFadeTime = 0.2
+        })
+
+        local Tabs = {
+            Main = Window:AddTab('Bot Management'),
+            Settings = Window:AddTab('Settings')
+        }
+
+        local LeftGroupBox = Tabs.Main:AddLeftGroupbox('Targeting Control')
+        local ActionGroupBox = Tabs.Main:AddLeftGroupbox('Swarm Ability Usage')
+        local RightGroupBox = Tabs.Main:AddRightGroupbox('Tuning & Configs')
+
+        local SelectedPlayer = ""
+        local PlayerDropdown = nil
+        local Toggles = {}
+
+        -- Helper to check if a player is currently an active bot in the file
+        local function IsPlayerAnActiveBot(playerName)
+            local data = GetClusterData()
+            if data and data.ActiveBots then
+                local botTimestamp = data.ActiveBots[playerName]
+                if botTimestamp and (os.time() - botTimestamp < 8) then
+                    return true
+                end
+            end
+            return false
+        end
+
+        local function GetPlayerList()
+            local list = {}
+            for _, p in pairs(Players:GetPlayers()) do
+                if p ~= LocalPlayer and not Whitelist[p.Name:lower()] and not IsPlayerAnActiveBot(p.Name) then 
+                    table.insert(list, p.Name) 
+                end
+            end
+            return list
+        end
+
+        PlayerDropdown = LeftGroupBox:AddDropdown('PlayerDropdownIndex', {
+            Values = GetPlayerList(),
+            Default = 1,
+            Multi = false,
+            Text = 'Select Target Player',
+            Tooltip = 'Target user for cluster orders',
+            Callback = function(Value)
+                if Value and Value ~= "" then
+                    SelectedPlayer = Value
+                    
+                    local activeMode = "STOP"
+                    if Toggles.Attach and Toggles.Attach.Value then activeMode = "ATTACH"
+                    elseif Toggles.Tween and Toggles.Tween.Value then activeMode = "TWEEN"
+                    elseif Toggles.Orbit and Toggles.Orbit.Value then activeMode = "ORBIT"
+                    end
+                    
+                    local data = GetClusterData()
+                    data.Target = SelectedPlayer
+                    data.Command = activeMode
+                    SaveClusterData(data)
+                end
+            end
+        })
+        
+        SelectedPlayer = PlayerDropdown.Value or ""
+
+        -- --- REAL-TIME MOUSE DRAWING ENGINE FOR FOV RENDERER ---
+        FOVConnection = RunService.RenderStepped:Connect(function()
+            if ShowFOVGlobal and Running then
+                local mousePos = UserInputService:GetMouseLocation()
+                FOVCircle.Position = mousePos
+                FOVCircle.Radius = FOVRadiusGlobal
+                FOVCircle.Visible = true
+            else
+                FOVCircle.Visible = false
+            end
+        end)
+
+        -- --- DYNAMIC AUTO-TARGET ENGINE: EXCLUDES ACTIVE BOTS ---
+        local function SetTargetToClosestToCursor()
+            local mousePos = UserInputService:GetMouseLocation()
+            local closestPlayer = nil
+            local shortestDistance = FOVRadiusGlobal 
+            
+            for _, player in pairs(Players:GetPlayers()) do
+                if player ~= LocalPlayer and not Whitelist[player.Name:lower()] and not IsPlayerAnActiveBot(player.Name) then
+                    if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+                        local hrp = player.Character.HumanoidRootPart
+                        local screenPos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
+                     
+                        if onScreen then
+                            local playerScreenPos = Vector2.new(screenPos.X, screenPos.Y)
+                            local dist = (mousePos - playerScreenPos).Magnitude
+                            
+                            if dist < shortestDistance then
+                                shortestDistance = dist
+                                closestPlayer = player
+                            end
+                        end
+                    end
+                end
+            end
+            
+            if closestPlayer then
+                SelectedPlayer = closestPlayer.Name
+                
+                local activeMode = "STOP"
+                if Toggles.Attach and Toggles.Attach.Value then activeMode = "ATTACH"
+                elseif Toggles.Tween and Toggles.Tween.Value then activeMode = "TWEEN"
+                elseif Toggles.Orbit and Toggles.Orbit.Value then activeMode = "ORBIT"
+                end
+
+                local data = GetClusterData()
+                data.Target = closestPlayer.Name
+                data.Command = activeMode 
+                SaveClusterData(data)
+                
+                pcall(function()
+                    PlayerDropdown:SetValue(closestPlayer.Name)
+                end)
+                
+                Library:Notify("[Cluster Master]: Target locked via Z: " .. closestPlayer.Name, 1.5)
+            end
+        end
+
+        InputConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+            if gameProcessed then return end
+            if input.KeyCode == Enum.KeyCode.Z then
+                SetTargetToClosestToCursor()
+            end
+        end)
+
+        LeftGroupBox:AddLabel('Native Lock Target Keybind: [ Z ]')
+        LeftGroupBox:AddDivider()
+
+        -- FOV Control Panel Section
+        LeftGroupBox:AddToggle('ShowFOVRingToggle', {
+            Text = 'Display Visual FOV Viewer Circle',
+            Default = ShowFOVGlobal,
+            Callback = function(State)
+                ShowFOVGlobal = State
+                SaveMasterConfig(CurrentOrbitSpeed, CurrentOrbitRadius, CurrentM1Frequency, CurrentInfiniteWindow, FOVRadiusGlobal, ShowFOVGlobal)
+            end
+        })
+
+        LeftGroupBox:AddSlider('TargetingFOVSlider', {
+            Text = 'Lock-on FOV Radius Threshold',
+            Default = FOVRadiusGlobal, Min = 50, Max = 800, Rounding = 0,
+            Compact = false,
+            Callback = function(Value)
+                FOVRadiusGlobal = Value
+                SaveMasterConfig(CurrentOrbitSpeed, CurrentOrbitRadius, CurrentM1Frequency, CurrentInfiniteWindow, FOVRadiusGlobal, ShowFOVGlobal)
+            end
+        })
+
+        LeftGroupBox:AddDivider()
+
+        LeftGroupBox:AddToggle('AutoM1ToggleIndex', {
+            Text = 'Auto M1 Combat Spam',
+            Default = false,
+            Tooltip = 'Forces alts to lock-on swing and hold spacebar down continuously',
+            Callback = function(State)
+                local data = GetClusterData()
+                data.AutoM1 = State
+                SaveClusterData(data)
+            end
+        })
+
+        LeftGroupBox:AddToggle('InfiniteComboM1Index', {
+            Text = 'Infinite Combo M1 Thing Idk',
+            Default = false,
+            Tooltip = 'Staggers bot configurations sequentially so they do not cause knockback drops',
+            Callback = function(State)
+                local data = GetClusterData()
+                data.InfiniteCombo = State
+                SaveClusterData(data)
+            end
+        })
+
+        -- --- ABILITY TOGGLES ---
+        local currentMoveStates = {false, false, false, false}
+        
+        local function UpdateSharedMoveFile(slotIndex, booleanState)
+            currentMoveStates[slotIndex] = booleanState
+            local data = GetClusterData()
+            data.Moves = currentMoveStates
+            SaveClusterData(data)
+        end
+
+        ActionGroupBox:AddToggle('Move1Toggle', {
+            Text = 'Spam Ability [ 1 ]',
+            Default = false,
+            Callback = function(State) UpdateSharedMoveFile(1, State) end
+        })
+        
+        ActionGroupBox:AddToggle('Move2Toggle', {
+            Text = 'Spam Ability [ 2 ]',
+            Default = false,
+            Callback = function(State) UpdateSharedMoveFile(2, State) end
+        })
+        
+        ActionGroupBox:AddToggle('Move3Toggle', {
+            Text = 'Spam Ability [ 3 ]',
+            Default = false,
+            Callback = function(State) UpdateSharedMoveFile(3, State) end
+        })
+        
+        ActionGroupBox:AddToggle('Move4Toggle', {
+            Text = 'Spam Ability [ 4 ]',
+            Default = false,
+            Callback = function(State) UpdateSharedMoveFile(4, State) end
+        })
+
+        ActionGroupBox:AddDivider()
+
+        -- --- CHAT SYSTEM MASTER UI INTERACTION ---
+        ActionGroupBox:AddToggle('BotChatSpamToggle', {
+            Text = 'Cycle Chat Messages (30s)',
+            Default = false,
+            Tooltip = 'Forces bots to say messages sequentially from list every 30 seconds',
+            Callback = function(State)
+                local data = GetClusterData()
+                data.ChatSpam = State
+                SaveClusterData(data)
+            end
+        })
+
+        LeftGroupBox:AddDivider()
+
+        -- --- MOVEMENT CHECKBOXES WITH INTEGRATED KEYBINDS ---
+        local function ClearOtherMovementToggles(activeName)
+            for name, obj in pairs(Toggles) do
+                if name ~= activeName and obj.Value == true then
+                    obj:SetValue(false)
+                end
+            end
+        end
+
+        Toggles.Attach = LeftGroupBox:AddToggle('AttachMovementToggle', {
+            Text = 'Mode: Attach to Back',
+            Default = false,
+            Callback = function(State)
+                if State then
+                    ClearOtherMovementToggles("Attach")
+                    if SelectedPlayer ~= "" then
+                        local data = GetClusterData()
+                        data.Command = "ATTACH"
+                        data.Target = SelectedPlayer
+                        SaveClusterData(data)
+                    end
+                else
+                    local data = GetClusterData()
+                    if data.Command == "ATTACH" then
+                        data.Command = "STOP"
+                        SaveClusterData(data)
+                    end
+                end
+            end
+        })
+        Toggles.Attach:AddKeyPicker('AttachKeybind', {
+            Default = 'None',
+            SyncToggleState = true,
+            Mode = 'Toggle',
+            Text = 'Attach Movement Mode Key',
+            NoUI = false
+        })
+
+        Toggles.Tween = LeftGroupBox:AddToggle('TweenMovementToggle', {
+            Text = 'Mode: Tween to Player',
+            Default = false,
+            Callback = function(State)
+                if State then
+                    ClearOtherMovementToggles("Tween")
+                    if SelectedPlayer ~= "" then
+                        local data = GetClusterData()
+                        data.Command = "TWEEN"
+                        data.Target = SelectedPlayer
+                        SaveClusterData(data)
+                    end
+                else
+                    local data = GetClusterData()
+                    if data.Command == "TWEEN" then
+                        data.Command = "STOP"
+                        SaveClusterData(data)
+                    end
+                end
+            end
+        })
+        Toggles.Tween:AddKeyPicker('TweenKeybind', {
+            Default = 'None',
+            SyncToggleState = true,
+            Mode = 'Toggle',
+            Text = 'Tween Movement Mode Key',
+            NoUI = false
+        })
+
+        Toggles.Orbit = LeftGroupBox:AddToggle('OrbitMovementToggle', {
+            Text = 'Mode: Orbit Target',
+            Default = false,
+            Callback = function(State)
+                if State then
+                    ClearOtherMovementToggles("Orbit")
+                    if SelectedPlayer ~= "" then
+                        local data = GetClusterData()
+                        data.Command = "ORBIT"
+                        data.Target = SelectedPlayer
+                        data.OrbitSpeed = CurrentOrbitSpeed
+                        data.OrbitRadius = CurrentOrbitRadius
+                        SaveClusterData(data)
+                    end
+                else
+                    local data = GetClusterData()
+                    if data.Command == "ORBIT" then
+                        data.Command = "STOP"
+                        SaveClusterData(data)
+                    end
+                end
+            end
+        })
+        Toggles.Orbit:AddKeyPicker('OrbitKeybind', {
+            Default = 'None',
+            SyncToggleState = true,
+            Mode = 'Toggle',
+            Text = 'Orbit Movement Mode Key',
+            NoUI = false
+        })
+
+        RightGroupBox:AddSlider('OrbitSpeedSlider', {
+            Text = 'Swarm Orbit Speed Tuning',
+            Default = CurrentOrbitSpeed, Min = 5, Max = 60, Rounding = 0,
+            Compact = false,
+            Callback = function(Value)
+                CurrentOrbitSpeed = Value
+                SaveMasterConfig(CurrentOrbitSpeed, CurrentOrbitRadius, CurrentM1Frequency, CurrentInfiniteWindow, FOVRadiusGlobal, ShowFOVGlobal)
+                local data = GetClusterData()
+                if data.Command == "ORBIT" then data.OrbitSpeed = CurrentOrbitSpeed; SaveClusterData(data) end
+            end
+        })
+
+        RightGroupBox:AddSlider('OrbitRadiusSlider', {
+            Text = 'Swarm Orbit Range Tuning',
+            Default = CurrentOrbitRadius, Min = 2, Max = 30, Rounding = 0,
+            Compact = false,
+            Callback = function(Value)
+                CurrentOrbitRadius = Value
+                SaveMasterConfig(CurrentOrbitSpeed, CurrentOrbitRadius, CurrentM1Frequency, CurrentInfiniteWindow, FOVRadiusGlobal, ShowFOVGlobal)
+                local data = GetClusterData()
+                if data.Command == "ORBIT" then data.OrbitRadius = CurrentOrbitRadius; SaveClusterData(data) end
+            end
+        })
+
+        RightGroupBox:AddSlider('M1FrequencySlider', {
+            Text = 'Auto M1 Frequency (Delay)',
+            Default = CurrentM1Frequency, Min = 0.05, Max = 1.0, Rounding = 2,
+            Compact = false,
+            Callback = function(Value)
+                CurrentM1Frequency = Value
+                SaveMasterConfig(CurrentOrbitSpeed, CurrentOrbitRadius, CurrentM1Frequency, CurrentInfiniteWindow, FOVRadiusGlobal, ShowFOVGlobal)
+                local data = GetClusterData()
+                data.M1Frequency = CurrentM1Frequency
+                SaveClusterData(data)
+            end
+        })
+
+        RightGroupBox:AddSlider('InfiniteWindowSlider', {
+            Text = 'Infinite Stagger Window (Secs)',
+            Default = CurrentInfiniteWindow, Min = 0.4, Max = 3.5, Rounding = 1,
+            Compact = false,
+            Callback = function(Value)
+                CurrentInfiniteWindow = Value
+                SaveMasterConfig(CurrentOrbitSpeed, CurrentOrbitRadius, CurrentM1Frequency, CurrentInfiniteWindow, FOVRadiusGlobal, ShowFOVGlobal)
+                local data = GetClusterData()
+                data.InfiniteWindow = CurrentInfiniteWindow
+                SaveClusterData(data)
+            end
+        })
+
+        RightGroupBox:AddDivider()
+
+        RightGroupBox:AddButton({
+            Text = 'Force Respawn All Alts',
+            Func = function()
+                local data = GetClusterData()
+                data.Command = "RESPAWN"
+                SaveClusterData(data)
+            end
+        })
+
+        RightGroupBox:AddButton({
+            Text = 'Order Bots: STOP Command',
+            Func = function()
+                ClearOtherMovementToggles("None")
+                local data = GetClusterData()
+                data.Command = "STOP"
+                data.Target = ""
+                data.AutoM1 = false
+                data.InfiniteCombo = false
+                data.ChatSpam = false
+                SaveClusterData(data)
+            end
+        })
+
+        RightGroupBox:AddDivider()
+        local TrackerLabel = RightGroupBox:AddLabel('Active Bots Connected: 0')
+        local BotNamesLabel = RightGroupBox:AddLabel('')
+
+        -- --- EXTENDED VERTICAL PADDING SPACE ---
+        -- Structural blank labels to push the RightGroupBox length downward
+        -- This provides plenty of space for long multi-line bot names without text clipping.
+        RightGroupBox:AddLabel('')
+        RightGroupBox:AddLabel('')
+        RightGroupBox:AddLabel('')
+        RightGroupBox:AddLabel('')
+        RightGroupBox:AddLabel('')
+        RightGroupBox:AddLabel('')
+        RightGroupBox:AddLabel('')
+        RightGroupBox:AddLabel('')
+        -- ---------------------------------------
+
+        task.spawn(function()
+            while Running do
+                task.wait(3)
+                pcall(function()
+                    PlayerDropdown:SetValues(GetPlayerList())
+                end)
+                
+                pcall(function()
+                    local data = GetClusterData()
+                    local activeCount = 0
+                    local connectedNames = {}
+                    
+                    if data.ActiveBots then
+                        for botName, timestamp in pairs(data.ActiveBots) do
+                            if os.time() - timestamp < 8 then
+                                activeCount = activeCount + 1
+                                table.insert(connectedNames, "• " .. botName)
+                            end
+                        end
+                    end
+                    
+                    TrackerLabel:SetText('Active Bots Connected: ' .. tostring(activeCount))
+                    
+                    if activeCount > 0 then
+                        BotNamesLabel:SetText(table.concat(connectedNames, "\n"))
+                    else
+                        BotNamesLabel:SetText('None connected')
+                    end
+                end)
+            end
+        end)
+
+        -- --- SETTINGS TAB CONFIGURATION ---
+        local SettingLeftBox = Tabs.Settings:AddLeftGroupbox('Utility')
+        local SettingRightBox = Tabs.Settings:AddRightGroupbox('Menu Settings')
+        
+        SettingLeftBox:AddToggle('AntiAFKToggle', {
+            Text = 'Enable Anti-AFK Engine',
+            Default = false,
+            Tooltip = 'Prevents disconnection from 20 minute inactivity kicks.',
+            Callback = function(State)
+                SetAntiAFKState(State)
+            end
+        })
+
+        -- Setup Theme and Configuration Savers via Linoria Managers
+        ThemeManager:SetLibrary(Library)
+        SaveManager:SetLibrary(Library)
+        
+        ThemeManager:SetFolder('aba_yslmethod')
+        SaveManager:SetFolder('aba_yslmethod/configs')
+    
+        SaveManager:BuildConfigSection(Tabs.Settings)
+        ThemeManager:ApplyToGroupbox(SettingRightBox)
+        SaveManager:LoadAutoloadConfig()
+
+        _G.CancelABAContoller = function()
+            Running = false
+            StopAllActions()
+            SetAntiAFKState(false)
+            if InputConnection then InputConnection:Disconnect(); InputConnection = nil end
+            if FOVConnection then FOVConnection:Disconnect(); FOVConnection = nil end
+            if FOVCircle then FOVCircle:Remove() end
+            pcall(function() Library:Unload() end)
+            print("[Cluster Watchdog]: Session cleanly unloaded.")
+        end
+    end
+end)
+
+if not mainSuccess then
+    warn("[ScriptHub CRASH LOG]: " .. tostring(mainError))
+end
