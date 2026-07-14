@@ -21,6 +21,8 @@ local VirtualInputManager = game:GetService("VirtualInputManager")
 local UserInputService = game:GetService("UserInputService")
 local TextChatService = game:GetService("TextChatService")
 local TeleportService = game:GetService("TeleportService")
+local SoundService = game:GetService("SoundService")
+local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
@@ -45,11 +47,160 @@ local AutoM1ActiveGlobal = false
 local InfiniteComboGlobal = false 
 local ActiveCommandGlobal = "STOP"
 local MoveTogglesGlobal = { false, false, false, false }
-local ModeSpamActiveGlobal = false -- Added for Mode Spam tracking
 local M1FrequencyGlobal = 0.22
 local InfiniteWindowGlobal = 1.4
 local CurrentTargetGlobal = ""
 local ChatSpamActiveGlobal = false
+
+-- Spectator Configuration States
+local TabListSpectatorEnabled = false
+local SpectatingTarget = nil
+
+-- Mod Detector Core Runtime Configurations
+local ModDetectorEnabled = false
+local DetectorAction = "Alert Only" 
+local GroupCheckEnabled = true
+local GroupIdCheckValue = 313075 
+local MinRankCheckValue = 10 
+local PlayAlertSoundEnabled = true  
+local AlertVolumeValue = 2.0
+
+-- Hardcoded Sound Paths
+local JoinSoundID = "rbxassetid://135527611526778"
+local LeaveSoundID = "rbxassetid://119765943835635"
+
+local CustomModList = {
+    ["snakeworl"] = true,
+    ["melon_sensei"] = true,
+    ["chicken_man"] = true,
+    ["k1lluaa"] = true,
+    ["aeytwo"] = true,
+    ["draculaoji"] = true
+}
+
+-- Tracker to remember flagged staff currently inside the server lobby
+local ActiveStaffInServer = {}
+
+-- Utility function to locally execute notification noises
+local function PlayLocalWarningNoise(audioPath)
+    if not PlayAlertSoundEnabled or not audioPath or audioPath == "" then return end
+    pcall(function()
+        local sound = Instance.new("Sound")
+        sound.SoundId = audioPath
+        sound.Volume = AlertVolumeValue
+        sound.PlayOnRemove = true
+        sound.Parent = SoundService
+        sound:Play()
+        sound:Destroy()
+    end)
+end
+
+-- Check logic to determine if a specific profile matches criteria
+local function IsPlayerStaffProfile(player)
+    if player == LocalPlayer or Whitelist[player.Name:lower()] then return false end
+    
+    -- 1. Check Custom Username List
+    if CustomModList[player.Name:lower()] then
+        return true
+    end
+    
+    -- 2. Check Official Game Group Rank
+    local groupMatch = false
+    if GroupCheckEnabled and GroupIdCheckValue and GroupIdCheckValue > 0 then
+        pcall(function()
+            local rank = player:GetRankInGroup(GroupIdCheckValue)
+            if rank >= MinRankCheckValue then
+                groupMatch = true
+            end
+        end)
+    end
+    
+    return groupMatch
+end
+
+-- --- CORE MOD DETECTOR HANDLER ---
+local function CheckPlayerForStaff(player)
+    if not ModDetectorEnabled or not Running then return end
+    if player == LocalPlayer or Whitelist[player.Name:lower()] then return end
+    
+    local isMod = IsPlayerStaffProfile(player)
+    
+    -- Trigger Protective Action if flagged
+    if isMod and not ActiveStaffInServer[player.Name] then
+        ActiveStaffInServer[player.Name] = true
+        
+        -- Fire local alert join sound immediately
+        PlayLocalWarningNoise(JoinSoundID)
+
+        if DetectorAction == "Kick" then
+            LocalPlayer:Kick("[STAFF DETECTED]: " .. player.Name .. " has entered your game session.")
+        elseif DetectorAction == "Server Hop" then
+            pcall(function()
+                local x = HttpService:JSONDecode(game:HttpGet("https://games.roblox.com/v1/games/"..game.PlaceId.."/servers/Public?sortOrder=Asc&limit=100"))
+                for _, server in pairs(x.data) do
+                    if server.playing < server.maxPlayers and server.id ~= game.JobId then
+                        TeleportService:TeleportToPlaceInstance(game.PlaceId, server.id, LocalPlayer)
+                        break
+                    end
+                end
+            end)
+            task.wait(2)
+            LocalPlayer:Kick("[STAFF HOPPING]: Attempting to jump server lobbies...")
+        elseif DetectorAction == "Alert Only" then
+            pcall(function()
+                local Library = loadstring(game:HttpGet('https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/Library.lua'))()
+                Library:Notify("[🔴 STAFF JOINED]: Username " .. player.Name .. " has entered the session!", 10)
+            end)
+        end
+    end
+end
+
+-- Listen for departures
+Players.PlayerRemoving:Connect(function(player)
+    if ActiveStaffInServer[player.Name] then
+        ActiveStaffInServer[player.Name] = nil
+        if ModDetectorEnabled and Running then
+            PlayLocalWarningNoise(LeaveSoundID)
+            pcall(function()
+                local Library = loadstring(game:HttpGet('https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/Library.lua'))()
+                Library:Notify("[🟢 STAFF LEFT]: Username " .. player.Name .. " has left the game lobby.", 8)
+            end)
+        end
+    end
+end)
+
+-- Dynamic Character Harvester Function
+local function GetABACharacters()
+    local characterList = {}
+    pcall(function()
+        local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+        local hud = playerGui and playerGui:FindFirstChild("HUD")
+        local charSelect = hud and hud:FindFirstChild("CharacterSelect")
+        local charactersFolder = charSelect and charSelect:FindFirstChild("Characters")
+        
+        if charactersFolder then
+            for _, page in pairs(charactersFolder:GetChildren()) do
+                for _, series in pairs(page:GetChildren()) do
+                    local slotsFolder = series:FindFirstChild("Slots")
+                    if slotsFolder then
+                        for _, slot in pairs(slotsFolder:GetChildren()) do
+                            if not table.find(characterList, slot.Name) then
+                                table.insert(characterList, slot.Name)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+    
+    if #characterList == 0 then
+        characterList = {"Goku", "Luffy", "Ichigo", "Naruto [Shippuden]", "Sasuke"}
+    end
+    
+    table.sort(characterList)
+    return characterList
+end
 
 -- Cached cluster state to prevent file read collisions
 local BotIndexGlobal = 1
@@ -100,7 +251,7 @@ local function GetClusterData()
         local ok, data = pcall(function() return HttpService:JSONDecode(content) end)
         if ok and data then return data end
     end
-    return { Command = "STOP", Target = "", OrbitSpeed = 22, OrbitRadius = 6, AutoM1 = false, InfiniteCombo = false, M1Frequency = 0.22, InfiniteWindow = 1.4, Moves = {false, false, false, false}, ModeSpam = false, ChatSpam = false, ActiveBots = {} }
+    return { Command = "STOP", Target = "", OrbitSpeed = 22, OrbitRadius = 6, AutoM1 = false, InfiniteCombo = false, M1Frequency = 0.22, InfiniteWindow = 1.4, Moves = {false, false, false, false}, ForcedCharacter = "", ChatSpam = false, ActiveBots = {}, ModDetector = { Enabled = false, Action = "Alert Only", GroupCheck = true, GroupID = 313075, MinRank = 10, CustomList = {}, SoundAlert = true, Volume = 2.0 } }
 end
 
 local function SaveClusterData(data)
@@ -144,12 +295,53 @@ local function SetAntiAFKState(enabled)
     end
 end
 
+-- --- SPECTATOR MECHANICS ---
+local function StartSpectating(player)
+    if not player then return end
+    SpectatingTarget = player
+    pcall(function()
+        if player.Character then
+            local targetSubject = player.Character:FindFirstChildOfClass("Humanoid") or player.Character:FindFirstChild("HumanoidRootPart")
+            if targetSubject then
+                Camera.CameraSubject = targetSubject
+                Camera.CameraType = Enum.CameraType.Custom
+            end
+        end
+    end)
+end
+
+local function StopSpectating()
+    SpectatingTarget = nil
+    pcall(function()
+        Camera.CameraType = Enum.CameraType.Custom
+        if LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid") then
+            Camera.CameraSubject = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+        end
+    end)
+end
+
+-- Maintain camera view on spectated target dynamically across resets/respawns
+RunService.RenderStepped:Connect(function()
+    if Running and TabListSpectatorEnabled and SpectatingTarget then
+        pcall(function()
+            if SpectatingTarget.Character and SpectatingTarget.Character:FindFirstChildOfClass("Humanoid") then
+                local hum = SpectatingTarget.Character:FindFirstChildOfClass("Humanoid")
+                if Camera.CameraSubject ~= hum then
+                    Camera.CameraSubject = hum
+                end
+            end
+        end)
+    end
+end)
+
 -- --- MAIN EXECUTION WRAPPER ---
 local mainSuccess, mainError = pcall(function()
     
+    -- Setup runtime triggers for checking incoming players
+    Players.PlayerAdded:Connect(CheckPlayerForStaff)
+    
     -- --- BOT REGISTRATION & AUTOMATIC ANTI-AFK ---
     if not IsMaster then
-        -- Automatically load and activate the Anti-AFK engine for bot instances
         SetAntiAFKState(true)
 
         task.spawn(function()
@@ -170,6 +362,7 @@ local mainSuccess, mainError = pcall(function()
             Camera.CameraType = Enum.CameraType.Custom
             if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
                 local hum = LocalPlayer.Character.Humanoid
+                Camera.CameraSubject = hum
                 hum.AutoRotate = true
                 hum.Jump = false
             end
@@ -267,6 +460,7 @@ local mainSuccess, mainError = pcall(function()
         local lastTarget = ""
         local lastSpeed = 22
         local lastRadius = 6
+        local lastForcedChar = ""
         
         local CachedInputRemote = nil
 
@@ -304,13 +498,25 @@ local mainSuccess, mainError = pcall(function()
                 InfiniteComboGlobal = data.InfiniteCombo or false 
                 ActiveCommandGlobal = data.Command or "STOP"
                 MoveTogglesGlobal = data.Moves or {false, false, false, false}
-                ModeSpamActiveGlobal = data.ModeSpam or false -- Pulling mode spam updates from data
                 
                 M1FrequencyGlobal = data.M1Frequency or 0.22
                 InfiniteWindowGlobal = data.InfiniteWindow or 1.4
                 CurrentTargetGlobal = data.Target or ""
                 ChatSpamActiveGlobal = data.ChatSpam or false
-                
+        
+                if data.ModDetector then
+                    ModDetectorEnabled = data.ModDetector.Enabled or false
+                    DetectorAction = data.ModDetector.Action or "Alert Only"
+                    GroupCheckEnabled = data.ModDetector.GroupCheck ~= false
+                    GroupIdCheckValue = data.ModDetector.GroupID or 313075
+                    MinRankCheckValue = data.ModDetector.MinRank or 10
+                    PlayAlertSoundEnabled = data.ModDetector.SoundAlert ~= false
+                    AlertVolumeValue = data.ModDetector.Volume or 2.0
+                    if data.ModDetector.CustomList then
+                        CustomModList = data.ModDetector.CustomList
+                    end
+                end
+
                 local botList = {}
                 if data.ActiveBots then
                     for bName, timestamp in pairs(data.ActiveBots) do
@@ -320,10 +526,45 @@ local mainSuccess, mainError = pcall(function()
                     end
                 end
                 table.sort(botList)
-                
+               
                 BotIndexGlobal = table.find(botList, LocalPlayer.Name) or 1
                 TotalBotsGlobal = #botList > 0 and #botList or 1
                 
+                for _, player in pairs(Players:GetPlayers()) do
+                    CheckPlayerForStaff(player)
+                end
+
+                if data.ForcedCharacter and data.ForcedCharacter ~= lastForcedChar and data.ForcedCharacter ~= "" then
+                    lastForcedChar = data.ForcedCharacter
+                    pcall(function()
+                        local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+                        if playerGui then
+                            for _, descendant in pairs(playerGui:GetDescendants()) do
+                                if descendant:IsA("TextButton") or descendant:IsA("ImageButton") then
+                                    local nameMatch = descendant.Name:lower() == lastForcedChar:lower()
+                                    local textMatch = descendant:IsA("TextButton") and descendant.Text:lower():find(lastForcedChar:lower(), 1, true) ~= nil
+                                    
+                                    if nameMatch or textMatch then
+                                        local virtualUser = game:GetService("VirtualUser")
+                                        pcall(function()
+                                            if descendant.Visible and descendant.AbsoluteSize.X > 0 then
+                                                virtualUser:ClickButton1(descendant.AbsolutePosition + (descendant.AbsoluteSize / 2))
+                                            end
+                                        end)
+                                    end
+                                end
+                            end
+                        end
+
+                        local inputEvent = GetHiddenInputRemote()
+                        if inputEvent then
+                            inputEvent:FireServer("CharacterButton", lastForcedChar)
+                            task.wait(0.15)
+                            inputEvent:FireServer("ClickPlay")
+                        end
+                    end)
+                end
+
                 if data.Command ~= lastCommand or data.Target ~= lastTarget or data.OrbitSpeed ~= lastSpeed or data.OrbitRadius ~= lastRadius then
                     lastCommand = data.Command
                     lastTarget = data.Target
@@ -381,22 +622,6 @@ local mainSuccess, mainError = pcall(function()
                                 SaveClusterData(clearData)
                             end
                         end)
-                    elseif lastCommand == "FORCE_AFK" then -- New listener instruction for remote-firing AFK
-                        StopAllActions()
-                        pcall(function()
-                            local inputEvent = GetHiddenInputRemote()
-                            if inputEvent then
-                                inputEvent:FireServer("AFKToggle")
-                            end
-                        end)
-                        task.spawn(function()
-                            task.wait(0.5)
-                            local clearData = GetClusterData()
-                            if clearData.Command == "FORCE_AFK" then
-                                clearData.Command = "STOP"
-                                SaveClusterData(clearData)
-                            end
-                        end)
                     elseif lastCommand == "STOP" then
                         StopAllActions()
                     end
@@ -405,7 +630,6 @@ local mainSuccess, mainError = pcall(function()
             end
         end)
         
-        -- --- 30 SECOND CHAT SPAMMER LOOP ---
         task.spawn(function()
             local phraseIndex = 1
             while Running do
@@ -432,7 +656,6 @@ local mainSuccess, mainError = pcall(function()
             end
         end)
 
-        -- STAGGER-SEQUENCED COMBAT ENGINE
         task.spawn(function()
             while Running do
                 local actionAllowed = (ActiveCommandGlobal == "ORBIT" or ActiveCommandGlobal == "ATTACH")
@@ -444,7 +667,6 @@ local mainSuccess, mainError = pcall(function()
                     if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
                         local targetHRP = target.Character.HumanoidRootPart
                         
-                        -- Infinite Combo / Auto M1 Handler Pass
                         if AutoM1ActiveGlobal and inputEvent then
                             if InfiniteComboGlobal then
                                 local windowLength = InfiniteWindowGlobal
@@ -475,7 +697,6 @@ local mainSuccess, mainError = pcall(function()
                             end
                         end
                         
-                        -- Hardware Ability Loop Pass
                         for moveIndex = 1, 4 do
                             if MoveTogglesGlobal[moveIndex] then
                                 local TargetKey = SlotKeyMap[moveIndex]
@@ -486,18 +707,9 @@ local mainSuccess, mainError = pcall(function()
                                 end)
                             end
                         end
-
-                        -- Mode Spam Pass (Spams G Key)
-                        if ModeSpamActiveGlobal then
-                            pcall(function()
-                                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.G, false, game)
-                                task.wait(0.02)
-                                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.G, false, game)
-                            end)
-                        end
                     end
                 end
-               
+            
                 local baseWaitTime = InfiniteComboGlobal and 0.05 or M1FrequencyGlobal
                 local indexStaggerOffset = InfiniteComboGlobal and 0 or (BotIndexGlobal * 0.04)
                 task.wait(baseWaitTime + indexStaggerOffset) 
@@ -513,7 +725,7 @@ local mainSuccess, mainError = pcall(function()
                 data.ActiveBots[LocalPlayer.Name] = nil
             end
             SaveClusterData(data)
-       end
+        end
     end
 
     -- --- MASTER MAIN USER INTERFACE ---
@@ -526,7 +738,13 @@ local mainSuccess, mainError = pcall(function()
         FOVRadiusGlobal = masterSettings.SavedFOV or 150
         ShowFOVGlobal = masterSettings.SavedShowFOV ~= false
 
-        SaveClusterData({ Command = "STOP", Target = "", OrbitSpeed = CurrentOrbitSpeed, OrbitRadius = CurrentOrbitRadius, AutoM1 = false, InfiniteCombo = false, M1Frequency = CurrentM1Frequency, InfiniteWindow = CurrentInfiniteWindow, Moves = {false, false, false, false}, ModeSpam = false, ChatSpam = false, ActiveBots = {} })
+        SaveClusterData({ Command = "STOP", Target = "", OrbitSpeed = CurrentOrbitSpeed, OrbitRadius = CurrentOrbitRadius, AutoM1 = false, InfiniteCombo = false, M1Frequency = CurrentM1Frequency, InfiniteWindow = CurrentInfiniteWindow, Moves = {false, false, false, false}, ForcedCharacter = "", ChatSpam = false, ActiveBots = {}, ModDetector = { Enabled = false, Action = "Alert Only", GroupCheck = true, GroupID = 313075, MinRank = 10, CustomList = CustomModList, SoundAlert = true, Volume = 2.0 } })
+
+        for _, p in pairs(Players:GetPlayers()) do
+            if IsPlayerStaffProfile(p) then
+                ActiveStaffInServer[p.Name] = true
+            end
+        end
 
         local repo = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/'
         local Library = loadstring(game:HttpGet(repo .. 'Library.lua'))()
@@ -539,22 +757,26 @@ local mainSuccess, mainError = pcall(function()
             AutoShow = true,
             TabPadding = 8,
             MenuFadeTime = 0.2
-         })
+        })
 
         local Tabs = {
             Main = Window:AddTab('Bot Management'),
+            Staff = Window:AddTab('Staff Detector'),
             Settings = Window:AddTab('Settings')
         }
 
         local LeftGroupBox = Tabs.Main:AddLeftGroupbox('Targeting Control')
         local ActionGroupBox = Tabs.Main:AddLeftGroupbox('Swarm Ability Usage')
+        local LoaderGroupBox = Tabs.Main:AddLeftGroupbox('Character Select Loader')
         local RightGroupBox = Tabs.Main:AddRightGroupbox('Tuning & Configs')
+
+        local DetectorLeftBox = Tabs.Staff:AddLeftGroupbox('Main Core Detector Settings')
+        local DetectorRightBox = Tabs.Staff:AddRightGroupbox('Group & Custom Configuration')
 
         local SelectedPlayer = ""
         local PlayerDropdown = nil
         local Toggles = {}
 
-        -- Helper to check if a player is currently an active bot in the file
         local function IsPlayerAnActiveBot(playerName)
             local data = GetClusterData()
             if data and data.ActiveBots then
@@ -602,7 +824,6 @@ local mainSuccess, mainError = pcall(function()
         
         SelectedPlayer = PlayerDropdown.Value or ""
 
-        -- --- REAL-TIME MOUSE DRAWING ENGINE FOR FOV RENDERER ---
         FOVConnection = RunService.RenderStepped:Connect(function()
             if ShowFOVGlobal and Running then
                 local mousePos = UserInputService:GetMouseLocation()
@@ -614,7 +835,6 @@ local mainSuccess, mainError = pcall(function()
             end
         end)
 
-        -- --- DYNAMIC AUTO-TARGET ENGINE: EXCLUDES ACTIVE BOTS ---
         local function SetTargetToClosestToCursor()
             local mousePos = UserInputService:GetMouseLocation()
             local closestPlayer = nil
@@ -625,11 +845,11 @@ local mainSuccess, mainError = pcall(function()
                     if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
                         local hrp = player.Character.HumanoidRootPart
                         local screenPos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
-                    
+                        
                         if onScreen then
                             local playerScreenPos = Vector2.new(screenPos.X, screenPos.Y)
                             local dist = (mousePos - playerScreenPos).Magnitude
-                          
+                            
                             if dist < shortestDistance then
                                 shortestDistance = dist
                                 closestPlayer = player
@@ -637,7 +857,7 @@ local mainSuccess, mainError = pcall(function()
                         end
                     end
                 end
-           end
+            end
             
             if closestPlayer then
                 SelectedPlayer = closestPlayer.Name
@@ -655,7 +875,7 @@ local mainSuccess, mainError = pcall(function()
                 
                 pcall(function()
                     PlayerDropdown:SetValue(closestPlayer.Name)
-               end)
+                end)
                 
                 Library:Notify("[Cluster Master]: Target locked via Z: " .. closestPlayer.Name, 1.5)
             end
@@ -682,12 +902,30 @@ local mainSuccess, mainError = pcall(function()
 
         LeftGroupBox:AddSlider('TargetingFOVSlider', {
             Text = 'Lock-on FOV Radius Threshold',
-            Default = FOVRadiusGlobal, Min = 50, Max = 800, Rounding = 0,
+            Default = FOVRadiusGlobal,
+            Min = 50,
+            Max = 800,
+            Rounding = 0,
             Compact = false,
             Callback = function(Value)
                 FOVRadiusGlobal = Value
                 SaveMasterConfig(CurrentOrbitSpeed, CurrentOrbitRadius, CurrentM1Frequency, CurrentInfiniteWindow, FOVRadiusGlobal, ShowFOVGlobal)
-           end
+            end
+        })
+
+        LeftGroupBox:AddDivider()
+
+        -- --- EXPLICIT TAB LIST SPECTATOR INTERCEPT TOGGLE ---
+        LeftGroupBox:AddToggle('TabListSpectatorToggle', {
+            Text = 'Enable Tab-List Spectator',
+            Default = false,
+            Tooltip = 'When enabled, clicking a user directly on the classic leaderboard targets your camera onto them.',
+            Callback = function(State)
+                TabListSpectatorEnabled = State
+                if not State then
+                    StopSpectating()
+                end
+            end
         })
 
         LeftGroupBox:AddDivider()
@@ -710,13 +948,11 @@ local mainSuccess, mainError = pcall(function()
             Callback = function(State)
                 local data = GetClusterData()
                 data.InfiniteCombo = State
-                 SaveClusterData(data)
+                SaveClusterData(data)
             end
         })
 
-        -- --- ABILITY TOGGLES ---
         local currentMoveStates = {false, false, false, false}
-        
         local function UpdateSharedMoveFile(slotIndex, booleanState)
             currentMoveStates[slotIndex] = booleanState
             local data = GetClusterData()
@@ -728,36 +964,21 @@ local mainSuccess, mainError = pcall(function()
             Text = 'Spam Ability [ 1 ]',
             Default = false,
             Callback = function(State) UpdateSharedMoveFile(1, State) end
-       })
-        
+        })
         ActionGroupBox:AddToggle('Move2Toggle', {
             Text = 'Spam Ability [ 2 ]',
             Default = false,
             Callback = function(State) UpdateSharedMoveFile(2, State) end
         })
-         
         ActionGroupBox:AddToggle('Move3Toggle', {
-             Text = 'Spam Ability [ 3 ]',
+            Text = 'Spam Ability [ 3 ]',
             Default = false,
             Callback = function(State) UpdateSharedMoveFile(3, State) end
         })
-        
         ActionGroupBox:AddToggle('Move4Toggle', {
             Text = 'Spam Ability [ 4 ]',
             Default = false,
             Callback = function(State) UpdateSharedMoveFile(4, State) end
-        })
-
-        -- Added: Mode Spam Toggle
-        ActionGroupBox:AddToggle('ModeSpamToggle', {
-            Text = 'Mode Spam [ G ]',
-            Default = false,
-            Tooltip = 'Forces bots to continuously spam the G key',
-            Callback = function(State)
-                local data = GetClusterData()
-                data.ModeSpam = State
-                SaveClusterData(data)
-            end
         })
 
         ActionGroupBox:AddDivider()
@@ -766,20 +987,199 @@ local mainSuccess, mainError = pcall(function()
             Text = 'Cycle Chat Messages (30s)',
             Default = false,
             Tooltip = 'Forces bots to say messages sequentially from list every 30 seconds',
-             Callback = function(State)
+            Callback = function(State)
                 local data = GetClusterData()
                 data.ChatSpam = State
                 SaveClusterData(data)
             end
         })
 
-        -- Added: Force AFK Alts Button
-        ActionGroupBox:AddButton({
-            Text = 'Force AFK All Alts',
+        LoaderGroupBox:AddDropdown('ABACharDropdown', {
+            Values = GetABACharacters(),
+            Default = 1,
+            Multi = false,
+            Text = 'Dynamic Character Selection',
+            Tooltip = 'Harvested instantly from your active HUD paths',
+            Callback = function(Value)
+                if Value and Value ~= "" then
+                    local data = GetClusterData()
+                    data.ForcedCharacter = Value
+                    SaveClusterData(data)
+                    Library:Notify("[Cluster Loader]: Selection updated to " .. Value, 1.5)
+                end
+            end
+        })
+
+        LoaderGroupBox:AddButton({
+            Text = 'Force Refresh UI Character List',
+            Func = function()
+                local refreshedList = GetABACharacters()
+                local dropdownObj = Library.Options.ABACharDropdown
+                if dropdownObj then
+                    dropdownObj:SetValues(refreshedList)
+                    Library:Notify("[Cluster Loader]: Scanned HUD. Discovered " .. tostring(#refreshedList) .. " characters!", 2)
+                end
+            end
+        })
+
+        LoaderGroupBox:AddDivider()
+
+        LoaderGroupBox:AddInput('CustomCharInputText', {
+            Text = 'Manual Character Override Name / ID',
+            Default = '',
+            Placeholder = 'Type exact button name manually',
+            Numeric = false,
+            Finished = true,
+            Callback = function(Value)
+                if Value and Value ~= "" then
+                    local data = GetClusterData()
+                    data.ForcedCharacter = Value
+                    SaveClusterData(data)
+                    Library:Notify("[Cluster Loader]: Manual override sent: " .. Value, 2)
+                end
+            end
+        })
+
+        LoaderGroupBox:AddButton({
+            Text = 'Clear Loader Command State',
             Func = function()
                 local data = GetClusterData()
-                data.Command = "FORCE_AFK"
+                data.ForcedCharacter = ""
                 SaveClusterData(data)
+                Library:Notify("[Cluster Loader]: Cleared current selection profile.", 1.5)
+            end
+        })
+
+        DetectorLeftBox:AddToggle('StaffDetectorGlobalEnable', {
+            Text = 'Enable Staff/Mod Anti-Log Engine',
+            Default = false,
+            Tooltip = 'Triggers automatic safety defenses if a moderator joins.',
+            Callback = function(State)
+                ModDetectorEnabled = State
+                local data = GetClusterData()
+                data.ModDetector.Enabled = State
+                SaveClusterData(data)
+            end
+        })
+
+        DetectorLeftBox:AddDropdown('StaffActionSelector', {
+            Values = {"Alert Only", "Kick", "Server Hop"},
+            Default = 1,
+            Multi = false,
+            Text = 'Staff Detection Action Type',
+            Tooltip = 'Defensive mechanism applied globally to all cluster bots.',
+            Callback = function(Value)
+                if Value then
+                    DetectorAction = Value
+                    local data = GetClusterData()
+                    data.ModDetector.Action = Value
+                    SaveClusterData(data)
+                end
+            end
+        })
+
+        DetectorLeftBox:AddDivider()
+
+        DetectorLeftBox:AddToggle('StaffSoundNoiseToggle', {
+            Text = 'Play Audio Triggers on Flag Event',
+            Default = true,
+            Tooltip = 'Executes hardcoded alert sounds immediately on staff joins or departures.',
+            Callback = function(State)
+                PlayAlertSoundEnabled = State
+                local data = GetClusterData()
+                data.ModDetector.SoundAlert = State
+                SaveClusterData(data)
+            end
+        })
+
+        DetectorLeftBox:AddSlider('StaffAudioVolumeSlider', {
+            Text = 'Alert Audio Feedback Volume',
+            Default = 2.0,
+            Min = 0.1,
+            Max = 10.0,
+            Rounding = 1,
+            Compact = false,
+            Callback = function(Value)
+                AlertVolumeValue = Value
+                local data = GetClusterData()
+                data.ModDetector.Volume = Value
+                SaveClusterData(data)
+            end
+        })
+
+        DetectorLeftBox:AddButton({ Text = 'Test Sound: Join Event ID', Func = function() PlayLocalWarningNoise(JoinSoundID) end })
+        DetectorLeftBox:AddButton({ Text = 'Test Sound: Leave Event ID', Func = function() PlayLocalWarningNoise(LeaveSoundID) end })
+
+        DetectorRightBox:AddToggle('GroupRankCheckToggle', {
+            Text = 'Enable Group Creator Rank Checking',
+            Default = true,
+            Callback = function(State)
+                GroupCheckEnabled = State
+                local data = GetClusterData()
+                data.ModDetector.GroupCheck = State
+                SaveClusterData(data)
+            end
+        })
+
+        DetectorRightBox:AddInput('GroupCheckInputBox', {
+            Text = 'Roblox Group ID Target',
+            Default = '313075',
+            Placeholder = 'Target group ID parameter',
+            Numeric = true,
+            Finished = true,
+            Callback = function(Value)
+                local id = tonumber(Value)
+                if id then
+                    GroupIdCheckValue = id
+                    local data = GetClusterData()
+                    data.ModDetector.GroupID = id
+                    SaveClusterData(data)
+                end
+            end
+        })
+
+        DetectorRightBox:AddSlider('GroupMinRankSlider', {
+            Text = 'Minimum Flagged Group Rank',
+            Default = 10,
+            Min = 1,
+            Max = 255,
+            Rounding = 0,
+            Compact = false,
+            Callback = function(Value)
+                MinRankCheckValue = Value
+                local data = GetClusterData()
+                data.ModDetector.MinRank = Value
+                SaveClusterData(data)
+            end
+        })
+
+        DetectorRightBox:AddDivider()
+
+        DetectorRightBox:AddInput('ManualModAddInput', {
+            Text = 'Blacklist Custom Staff User',
+            Default = '',
+            Placeholder = 'Type target username...',
+            Numeric = false,
+            Finished = true,
+            Callback = function(Value)
+                if Value and Value ~= "" then
+                    CustomModList[Value:lower()] = true
+                    local data = GetClusterData()
+                    data.ModDetector.CustomList = CustomModList
+                    SaveClusterData(data)
+                    Library:Notify("[Staff List]: Added " .. Value .. " to local definitions.", 2)
+                end
+            end
+        })
+
+        DetectorRightBox:AddButton({
+            Text = 'Reset Custom Blacklisted Users',
+            Func = function()
+                CustomModList = { ["snakeworl"] = true, ["melon_sensei"] = true, ["chicken_man"] = true, ["k1lluaa"] = true, ["aeytwo"] = true, ["draculaoji"] = true }
+                local data = GetClusterData()
+                data.ModDetector.CustomList = CustomModList
+                SaveClusterData(data)
+                Library:Notify("[Staff List]: Default ABA staff lists rolled back successfully.", 2)
             end
         })
 
@@ -799,11 +1199,11 @@ local mainSuccess, mainError = pcall(function()
             Callback = function(State)
                 if State then
                     ClearOtherMovementToggles("Attach")
-                     if SelectedPlayer ~= "" then
+                    if SelectedPlayer ~= "" then
                         local data = GetClusterData()
                         data.Command = "ATTACH"
                         data.Target = SelectedPlayer
-                         SaveClusterData(data)
+                        SaveClusterData(data)
                     end
                 else
                     local data = GetClusterData()
@@ -812,27 +1212,21 @@ local mainSuccess, mainError = pcall(function()
                         SaveClusterData(data)
                     end
                 end
-             end
+            end
         })
-        Toggles.Attach:AddKeyPicker('AttachKeybind', {
-            Default = 'None',
-            SyncToggleState = true,
-            Mode = 'Toggle',
-            Text = 'Attach Movement Mode Key',
-            NoUI = false
-        })
+        Toggles.Attach:AddKeyPicker('AttachKeybind', { Default = 'None', SyncToggleState = true, Mode = 'Toggle', Text = 'Attach Movement Mode Key', NoUI = false })
 
-         Toggles.Tween = LeftGroupBox:AddToggle('TweenMovementToggle', {
+        Toggles.Tween = LeftGroupBox:AddToggle('TweenMovementToggle', {
             Text = 'Mode: Tween to Player',
             Default = false,
             Callback = function(State)
                 if State then
                     ClearOtherMovementToggles("Tween")
-                     if SelectedPlayer ~= "" then
+                    if SelectedPlayer ~= "" then
                         local data = GetClusterData()
                         data.Command = "TWEEN"
                         data.Target = SelectedPlayer
-                         SaveClusterData(data)
+                        SaveClusterData(data)
                     end
                 else
                     local data = GetClusterData()
@@ -841,77 +1235,80 @@ local mainSuccess, mainError = pcall(function()
                         SaveClusterData(data)
                     end
                 end
-             end
+            end
         })
-        Toggles.Tween:AddKeyPicker('TweenKeybind', {
-            Default = 'None',
-            SyncToggleState = true,
-            Mode = 'Toggle',
-            Text = 'Tween Movement Mode Key',
-            NoUI = false
-        })
+        Toggles.Tween:AddKeyPicker('TweenKeybind', { Default = 'None', SyncToggleState = true, Mode = 'Toggle', Text = 'Tween Movement Mode Key', NoUI = false })
 
-         Toggles.Orbit = LeftGroupBox:AddToggle('OrbitMovementToggle', {
+        Toggles.Orbit = LeftGroupBox:AddToggle('OrbitMovementToggle', {
             Text = 'Mode: Orbit Target',
             Default = false,
             Callback = function(State)
                 if State then
                     ClearOtherMovementToggles("Orbit")
-                     if SelectedPlayer ~= "" then
+                    if SelectedPlayer ~= "" then
                         local data = GetClusterData()
                         data.Command = "ORBIT"
                         data.Target = SelectedPlayer
-                         data.OrbitSpeed = CurrentOrbitSpeed
+                        data.OrbitSpeed = CurrentOrbitSpeed
                         data.OrbitRadius = CurrentOrbitRadius
                         SaveClusterData(data)
                     end
-                 else
+                else
                     local data = GetClusterData()
                     if data.Command == "ORBIT" then
                         data.Command = "STOP"
-                         SaveClusterData(data)
+                        SaveClusterData(data)
                     end
                 end
             end
         })
-        Toggles.Orbit:AddKeyPicker('OrbitKeybind', {
-            Default = 'None',
-            SyncToggleState = true,
-             Mode = 'Toggle',
-            Text = 'Orbit Movement Mode Key',
-            NoUI = false
-        })
+        Toggles.Orbit:AddKeyPicker('OrbitKeybind', { Default = 'None', SyncToggleState = true, Mode = 'Toggle', Text = 'Orbit Movement Mode Key', NoUI = false })
 
         RightGroupBox:AddSlider('OrbitSpeedSlider', {
             Text = 'Swarm Orbit Speed Tuning',
-            Default = CurrentOrbitSpeed, Min = 5, Max = 60, Rounding = 0,
-             Compact = false,
+            Default = CurrentOrbitSpeed,
+            Min = 5,
+            Max = 60,
+            Rounding = 0,
+            Compact = false,
             Callback = function(Value)
                 CurrentOrbitSpeed = Value
                 SaveMasterConfig(CurrentOrbitSpeed, CurrentOrbitRadius, CurrentM1Frequency, CurrentInfiniteWindow, FOVRadiusGlobal, ShowFOVGlobal)
                 local data = GetClusterData()
-                 if data.Command == "ORBIT" then data.OrbitSpeed = CurrentOrbitSpeed; SaveClusterData(data) end
+                if data.Command == "ORBIT" then
+                    data.OrbitSpeed = CurrentOrbitSpeed
+                    SaveClusterData(data)
+                end
             end
         })
 
         RightGroupBox:AddSlider('OrbitRadiusSlider', {
             Text = 'Swarm Orbit Range Tuning',
-            Default = CurrentOrbitRadius, Min = 2, Max = 30, Rounding = 0,
+            Default = CurrentOrbitRadius,
+            Min = 2,
+            Max = 30,
+            Rounding = 0,
             Compact = false,
-             Callback = function(Value)
+            Callback = function(Value)
                 CurrentOrbitRadius = Value
                 SaveMasterConfig(CurrentOrbitSpeed, CurrentOrbitRadius, CurrentM1Frequency, CurrentInfiniteWindow, FOVRadiusGlobal, ShowFOVGlobal)
                 local data = GetClusterData()
-                if data.Command == "ORBIT" then data.OrbitRadius = CurrentOrbitRadius; SaveClusterData(data) end
-             end
+                if data.Command == "ORBIT" then
+                    data.OrbitRadius = CurrentOrbitRadius
+                    SaveClusterData(data)
+                end
+            end
         })
 
         RightGroupBox:AddSlider('M1FrequencySlider', {
             Text = 'Auto M1 Frequency (Delay)',
-            Default = CurrentM1Frequency, Min = 0.05, Max = 1.0, Rounding = 2,
+            Default = CurrentM1Frequency,
+            Min = 0.05,
+            Max = 1.0,
+            Rounding = 2,
             Compact = false,
             Callback = function(Value)
-                 CurrentM1Frequency = Value
+                CurrentM1Frequency = Value
                 SaveMasterConfig(CurrentOrbitSpeed, CurrentOrbitRadius, CurrentM1Frequency, CurrentInfiniteWindow, FOVRadiusGlobal, ShowFOVGlobal)
                 local data = GetClusterData()
                 data.M1Frequency = CurrentM1Frequency
@@ -919,13 +1316,16 @@ local mainSuccess, mainError = pcall(function()
             end
         })
 
-         RightGroupBox:AddSlider('InfiniteWindowSlider', {
+        RightGroupBox:AddSlider('InfiniteWindowSlider', {
             Text = 'Infinite Stagger Window (Secs)',
-            Default = CurrentInfiniteWindow, Min = 0.4, Max = 3.5, Rounding = 1,
+            Default = CurrentInfiniteWindow,
+            Min = 0.4,
+            Max = 3.5,
+            Rounding = 1,
             Compact = false,
             Callback = function(Value)
                 CurrentInfiniteWindow = Value
-                 SaveMasterConfig(CurrentOrbitSpeed, CurrentOrbitRadius, CurrentM1Frequency, CurrentInfiniteWindow, FOVRadiusGlobal, ShowFOVGlobal)
+                SaveMasterConfig(CurrentOrbitSpeed, CurrentOrbitRadius, CurrentM1Frequency, CurrentInfiniteWindow, FOVRadiusGlobal, ShowFOVGlobal)
                 local data = GetClusterData()
                 data.InfiniteWindow = CurrentInfiniteWindow
                 SaveClusterData(data)
@@ -934,13 +1334,13 @@ local mainSuccess, mainError = pcall(function()
 
         RightGroupBox:AddDivider()
 
-         RightGroupBox:AddButton({
+        RightGroupBox:AddButton({
             Text = 'Force Respawn All Alts',
             Func = function()
                 local data = GetClusterData()
                 data.Command = "RESPAWN"
                 SaveClusterData(data)
-             end
+            end
         })
 
         RightGroupBox:AddButton({
@@ -952,86 +1352,145 @@ local mainSuccess, mainError = pcall(function()
                 data.Target = ""
                 data.AutoM1 = false
                 data.InfiniteCombo = false
-                data.ModeSpam = false
                 data.ChatSpam = false
+                data.ForcedCharacter = ""
                 SaveClusterData(data)
-             end
+            end
         })
 
         RightGroupBox:AddDivider()
+
         local TrackerLabel = RightGroupBox:AddLabel('Active Bots Connected: 0')
-        
         local BotLabelsPool = {}
         for idx = 1, 15 do
             BotLabelsPool[idx] = RightGroupBox:AddLabel('')
         end
 
         task.spawn(function()
-             while Running do
+            while Running do
                 task.wait(3)
+                pcall(function() PlayerDropdown:SetValues(GetPlayerList()) end)
                 pcall(function()
-                    PlayerDropdown:SetValues(GetPlayerList())
-                end)
-                
-                 pcall(function()
                     local data = GetClusterData()
                     local activeCount = 0
                     local connectedNames = {}
-                    
-                     if data.ActiveBots then
+                    if data.ActiveBots then
                         for botName, timestamp in pairs(data.ActiveBots) do
                             if os.time() - timestamp < 8 then
-                                 activeCount = activeCount + 1
+                                activeCount = activeCount + 1
                                 table.insert(connectedNames, "• " .. botName)
                             end
-                         end
+                        end
                     end
-                    
                     TrackerLabel:SetText('Active Bots Connected: ' .. tostring(activeCount))
-                    
-                     for idx = 1, 15 do
+                    for idx = 1, 15 do
                         local nameForThisLine = connectedNames[idx]
                         if nameForThisLine then
                             BotLabelsPool[idx]:SetText(nameForThisLine)
-                         else
+                        else
                             if idx == 1 and activeCount == 0 then
                                 BotLabelsPool[idx]:SetText('None connected')
-                             else
+                            else
                                 BotLabelsPool[idx]:SetText('')
                             end
-                         end
+                        end
                     end
                 end)
             end
         end)
 
+        -- --- ASYNC UNIVERSAL TAB LIST INTERCEPT ENGINE (Deepwoken & Standard Compatible) ---
+        task.spawn(function()
+            while Running do
+                if TabListSpectatorEnabled then
+                    pcall(function()
+                        -- Scan both the core UI container and the custom user UI space (Deepwoken compatibility)
+                        local targets = {CoreGui, LocalPlayer:FindFirstChildOfClass("PlayerGui")}
+                        for _, container in ipairs(targets) do
+                            if container then
+                                for _, child in pairs(container:GetDescendants()) do
+                                    if child:IsA("TextButton") or child:IsA("ImageButton") then
+                                        -- Determine if the element or its text context resembles a list entry
+                                        local isListEntry = child.Name:lower():find("entry") or child.Name:lower():find("row") or child.Parent.Name:lower():find("list") or child.Parent.Name:lower():find("holder")
+                                        
+                                        if isListEntry and not child:GetAttribute("SpectateHooked") then
+                                            child:SetAttribute("SpectateHooked", true)
+                                            
+                                            child.MouseButton1Click:Connect(function()
+                                                if not TabListSpectatorEnabled then return end
+                                                
+                                                -- Fetch name labels inside or near the entry element
+                                                local textLabel = child:IsA("TextButton") and child or child:FindFirstChildOfClass("TextLabel") or child.Parent:FindFirstChildOfClass("TextLabel")
+                                                if not textLabel then return end
+                                                
+                                                local targetText = textLabel.Text:gsub("%s+", ""):lower()
+                                                if targetText == "" then return end
+                                                
+                                                for _, player in pairs(Players:GetPlayers()) do
+                                                    local pName = player.Name:lower()
+                                                    local pDisplay = player.DisplayName:lower()
+                                                    
+                                                    if player ~= LocalPlayer and (pName == targetText or pDisplay == targetText or targetText:find(pName, 1, true) or targetText:find(pDisplay, 1, true)) then
+                                                        -- Deepwoken "Project Rain" style click toggle:
+                                                        -- Click once to spectate. Click again on their name to unspectate.
+                                                        if SpectatingTarget == player then
+                                                            StopSpectating()
+                                                            Library:Notify("[Spectator]: Unspectated " .. player.DisplayName, 2)
+                                                        else
+                                                            StartSpectating(player)
+                                                            Library:Notify("[Spectator]: Now spectating " .. player.DisplayName, 2)
+                                                        end
+                                                        break
+                                                    end
+                                                end
+                                            end)
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end)
+                end
+                task.wait(1)
+            end
+        end)
+
         local SettingLeftBox = Tabs.Settings:AddLeftGroupbox('Utility')
         local SettingRightBox = Tabs.Settings:AddRightGroupbox('Menu Settings')
-        
+
         SettingLeftBox:AddToggle('AntiAFKToggle', {
-             Text = 'Enable Anti-AFK Engine',
+            Text = 'Enable Anti-AFK Engine',
             Default = false,
-            Tooltip = 'Prevents disconnection from 20 minute inactivity kicks.',
+            Tooltip = 'Prevents disconnection from Roblox servers on idle timeouts.',
             Callback = function(State)
                 SetAntiAFKState(State)
             end
         })
 
-         SettingLeftBox:AddButton({
-            Text = 'Make Alts Join elvk32',
+        SettingLeftBox:AddButton({
+            Text = 'Force Server Rejoin',
             Func = function()
-                local data = GetClusterData()
-                data.Command = "JOIN_SERVER"
-                SaveClusterData(data)
-                 Library:Notify("[Cluster Master]: Sent server join order to connected alts.", 2)
+                pcall(function()
+                    TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+                end)
             end
         })
 
         SettingLeftBox:AddButton({
-            Text = 'Make Alts Join Controller',
+            Text = 'Command Swarm: Join Private Server',
             Func = function()
                 local data = GetClusterData()
-                 data.Command = "JOIN_MASTER"
+                data.Command = "JOIN_SERVER"
+                SaveClusterData(data)
+                Library:Notify("[Cluster Master]: Ordered connected bots to switch places.", 2)
+            end
+        })
+
+        SettingLeftBox:AddButton({
+            Text = 'Command Swarm: Follow Master Server',
+            Func = function()
+                local data = GetClusterData()
+                data.Command = "JOIN_MASTER"
                 data.MasterPlaceId = game.PlaceId
                 data.MasterJobId = game.JobId
                 SaveClusterData(data)
@@ -1049,9 +1508,14 @@ local mainSuccess, mainError = pcall(function()
         ThemeManager:ApplyToGroupbox(SettingRightBox)
         SaveManager:LoadAutoloadConfig()
 
+        for _, player in pairs(Players:GetPlayers()) do
+            CheckPlayerForStaff(player)
+        end
+
         _G.CancelABAContoller = function()
             Running = false
-             StopAllActions()
+            StopAllActions()
+            StopSpectating()
             SetAntiAFKState(false)
             if InputConnection then InputConnection:Disconnect(); InputConnection = nil end
             if FOVConnection then FOVConnection:Disconnect(); FOVConnection = nil end
