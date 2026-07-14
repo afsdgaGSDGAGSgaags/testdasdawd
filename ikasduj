@@ -45,6 +45,7 @@ local AutoM1ActiveGlobal = false
 local InfiniteComboGlobal = false 
 local ActiveCommandGlobal = "STOP"
 local MoveTogglesGlobal = { false, false, false, false }
+local ModeSpamActiveGlobal = false -- Added for Mode Spam tracking
 local M1FrequencyGlobal = 0.22
 local InfiniteWindowGlobal = 1.4
 local CurrentTargetGlobal = ""
@@ -99,7 +100,7 @@ local function GetClusterData()
         local ok, data = pcall(function() return HttpService:JSONDecode(content) end)
         if ok and data then return data end
     end
-    return { Command = "STOP", Target = "", OrbitSpeed = 22, OrbitRadius = 6, AutoM1 = false, InfiniteCombo = false, M1Frequency = 0.22, InfiniteWindow = 1.4, Moves = {false, false, false, false}, ChatSpam = false, ActiveBots = {} }
+    return { Command = "STOP", Target = "", OrbitSpeed = 22, OrbitRadius = 6, AutoM1 = false, InfiniteCombo = false, M1Frequency = 0.22, InfiniteWindow = 1.4, Moves = {false, false, false, false}, ModeSpam = false, ChatSpam = false, ActiveBots = {} }
 end
 
 local function SaveClusterData(data)
@@ -303,6 +304,8 @@ local mainSuccess, mainError = pcall(function()
                 InfiniteComboGlobal = data.InfiniteCombo or false 
                 ActiveCommandGlobal = data.Command or "STOP"
                 MoveTogglesGlobal = data.Moves or {false, false, false, false}
+                ModeSpamActiveGlobal = data.ModeSpam or false -- Pulling mode spam updates from data
+                
                 M1FrequencyGlobal = data.M1Frequency or 0.22
                 InfiniteWindowGlobal = data.InfiniteWindow or 1.4
                 CurrentTargetGlobal = data.Target or ""
@@ -374,6 +377,22 @@ local mainSuccess, mainError = pcall(function()
                             task.wait(0.5)
                             local clearData = GetClusterData()
                             if clearData.Command == "RESPAWN" then
+                                clearData.Command = "STOP"
+                                SaveClusterData(clearData)
+                            end
+                        end)
+                    elseif lastCommand == "FORCE_AFK" then -- New listener instruction for remote-firing AFK
+                        StopAllActions()
+                        pcall(function()
+                            local inputEvent = GetHiddenInputRemote()
+                            if inputEvent then
+                                inputEvent:FireServer("AFKToggle")
+                            end
+                        end)
+                        task.spawn(function()
+                            task.wait(0.5)
+                            local clearData = GetClusterData()
+                            if clearData.Command == "FORCE_AFK" then
                                 clearData.Command = "STOP"
                                 SaveClusterData(clearData)
                             end
@@ -467,6 +486,15 @@ local mainSuccess, mainError = pcall(function()
                                 end)
                             end
                         end
+
+                        -- Mode Spam Pass (Spams G Key)
+                        if ModeSpamActiveGlobal then
+                            pcall(function()
+                                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.G, false, game)
+                                task.wait(0.02)
+                                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.G, false, game)
+                            end)
+                        end
                     end
                 end
                
@@ -485,7 +513,7 @@ local mainSuccess, mainError = pcall(function()
                 data.ActiveBots[LocalPlayer.Name] = nil
             end
             SaveClusterData(data)
-        end
+       end
     end
 
     -- --- MASTER MAIN USER INTERFACE ---
@@ -498,7 +526,7 @@ local mainSuccess, mainError = pcall(function()
         FOVRadiusGlobal = masterSettings.SavedFOV or 150
         ShowFOVGlobal = masterSettings.SavedShowFOV ~= false
 
-        SaveClusterData({ Command = "STOP", Target = "", OrbitSpeed = CurrentOrbitSpeed, OrbitRadius = CurrentOrbitRadius, AutoM1 = false, InfiniteCombo = false, M1Frequency = CurrentM1Frequency, InfiniteWindow = CurrentInfiniteWindow, Moves = {false, false, false, false}, ChatSpam = false, ActiveBots = {} })
+        SaveClusterData({ Command = "STOP", Target = "", OrbitSpeed = CurrentOrbitSpeed, OrbitRadius = CurrentOrbitRadius, AutoM1 = false, InfiniteCombo = false, M1Frequency = CurrentM1Frequency, InfiniteWindow = CurrentInfiniteWindow, Moves = {false, false, false, false}, ModeSpam = false, ChatSpam = false, ActiveBots = {} })
 
         local repo = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/'
         local Library = loadstring(game:HttpGet(repo .. 'Library.lua'))()
@@ -511,7 +539,7 @@ local mainSuccess, mainError = pcall(function()
             AutoShow = true,
             TabPadding = 8,
             MenuFadeTime = 0.2
-        })
+         })
 
         local Tabs = {
             Main = Window:AddTab('Bot Management'),
@@ -543,7 +571,7 @@ local mainSuccess, mainError = pcall(function()
             for _, p in pairs(Players:GetPlayers()) do
                 if p ~= LocalPlayer and not Whitelist[p.Name:lower()] and not IsPlayerAnActiveBot(p.Name) then 
                     table.insert(list, p.Name) 
-                end
+               end
             end
             return list
         end
@@ -601,7 +629,7 @@ local mainSuccess, mainError = pcall(function()
                         if onScreen then
                             local playerScreenPos = Vector2.new(screenPos.X, screenPos.Y)
                             local dist = (mousePos - playerScreenPos).Magnitude
-                            
+                          
                             if dist < shortestDistance then
                                 shortestDistance = dist
                                 closestPlayer = player
@@ -609,7 +637,7 @@ local mainSuccess, mainError = pcall(function()
                         end
                     end
                 end
-            end
+           end
             
             if closestPlayer then
                 SelectedPlayer = closestPlayer.Name
@@ -627,7 +655,7 @@ local mainSuccess, mainError = pcall(function()
                 
                 pcall(function()
                     PlayerDropdown:SetValue(closestPlayer.Name)
-                end)
+               end)
                 
                 Library:Notify("[Cluster Master]: Target locked via Z: " .. closestPlayer.Name, 1.5)
             end
@@ -659,7 +687,7 @@ local mainSuccess, mainError = pcall(function()
             Callback = function(Value)
                 FOVRadiusGlobal = Value
                 SaveMasterConfig(CurrentOrbitSpeed, CurrentOrbitRadius, CurrentM1Frequency, CurrentInfiniteWindow, FOVRadiusGlobal, ShowFOVGlobal)
-            end
+           end
         })
 
         LeftGroupBox:AddDivider()
@@ -682,7 +710,7 @@ local mainSuccess, mainError = pcall(function()
             Callback = function(State)
                 local data = GetClusterData()
                 data.InfiniteCombo = State
-                SaveClusterData(data)
+                 SaveClusterData(data)
             end
         })
 
@@ -700,7 +728,7 @@ local mainSuccess, mainError = pcall(function()
             Text = 'Spam Ability [ 1 ]',
             Default = false,
             Callback = function(State) UpdateSharedMoveFile(1, State) end
-        })
+       })
         
         ActionGroupBox:AddToggle('Move2Toggle', {
             Text = 'Spam Ability [ 2 ]',
@@ -709,7 +737,7 @@ local mainSuccess, mainError = pcall(function()
         })
          
         ActionGroupBox:AddToggle('Move3Toggle', {
-            Text = 'Spam Ability [ 3 ]',
+             Text = 'Spam Ability [ 3 ]',
             Default = false,
             Callback = function(State) UpdateSharedMoveFile(3, State) end
         })
@@ -720,15 +748,37 @@ local mainSuccess, mainError = pcall(function()
             Callback = function(State) UpdateSharedMoveFile(4, State) end
         })
 
+        -- Added: Mode Spam Toggle
+        ActionGroupBox:AddToggle('ModeSpamToggle', {
+            Text = 'Mode Spam [ G ]',
+            Default = false,
+            Tooltip = 'Forces bots to continuously spam the G key',
+            Callback = function(State)
+                local data = GetClusterData()
+                data.ModeSpam = State
+                SaveClusterData(data)
+            end
+        })
+
         ActionGroupBox:AddDivider()
 
         ActionGroupBox:AddToggle('BotChatSpamToggle', {
             Text = 'Cycle Chat Messages (30s)',
             Default = false,
             Tooltip = 'Forces bots to say messages sequentially from list every 30 seconds',
-            Callback = function(State)
+             Callback = function(State)
                 local data = GetClusterData()
                 data.ChatSpam = State
+                SaveClusterData(data)
+            end
+        })
+
+        -- Added: Force AFK Alts Button
+        ActionGroupBox:AddButton({
+            Text = 'Force AFK All Alts',
+            Func = function()
+                local data = GetClusterData()
+                data.Command = "FORCE_AFK"
                 SaveClusterData(data)
             end
         })
@@ -749,11 +799,11 @@ local mainSuccess, mainError = pcall(function()
             Callback = function(State)
                 if State then
                     ClearOtherMovementToggles("Attach")
-                    if SelectedPlayer ~= "" then
+                     if SelectedPlayer ~= "" then
                         local data = GetClusterData()
                         data.Command = "ATTACH"
                         data.Target = SelectedPlayer
-                        SaveClusterData(data)
+                         SaveClusterData(data)
                     end
                 else
                     local data = GetClusterData()
@@ -762,7 +812,7 @@ local mainSuccess, mainError = pcall(function()
                         SaveClusterData(data)
                     end
                 end
-            end
+             end
         })
         Toggles.Attach:AddKeyPicker('AttachKeybind', {
             Default = 'None',
@@ -772,17 +822,17 @@ local mainSuccess, mainError = pcall(function()
             NoUI = false
         })
 
-        Toggles.Tween = LeftGroupBox:AddToggle('TweenMovementToggle', {
+         Toggles.Tween = LeftGroupBox:AddToggle('TweenMovementToggle', {
             Text = 'Mode: Tween to Player',
             Default = false,
             Callback = function(State)
                 if State then
                     ClearOtherMovementToggles("Tween")
-                    if SelectedPlayer ~= "" then
+                     if SelectedPlayer ~= "" then
                         local data = GetClusterData()
                         data.Command = "TWEEN"
                         data.Target = SelectedPlayer
-                        SaveClusterData(data)
+                         SaveClusterData(data)
                     end
                 else
                     local data = GetClusterData()
@@ -791,7 +841,7 @@ local mainSuccess, mainError = pcall(function()
                         SaveClusterData(data)
                     end
                 end
-            end
+             end
         })
         Toggles.Tween:AddKeyPicker('TweenKeybind', {
             Default = 'None',
@@ -801,25 +851,25 @@ local mainSuccess, mainError = pcall(function()
             NoUI = false
         })
 
-        Toggles.Orbit = LeftGroupBox:AddToggle('OrbitMovementToggle', {
+         Toggles.Orbit = LeftGroupBox:AddToggle('OrbitMovementToggle', {
             Text = 'Mode: Orbit Target',
             Default = false,
             Callback = function(State)
                 if State then
                     ClearOtherMovementToggles("Orbit")
-                    if SelectedPlayer ~= "" then
+                     if SelectedPlayer ~= "" then
                         local data = GetClusterData()
                         data.Command = "ORBIT"
                         data.Target = SelectedPlayer
-                        data.OrbitSpeed = CurrentOrbitSpeed
+                         data.OrbitSpeed = CurrentOrbitSpeed
                         data.OrbitRadius = CurrentOrbitRadius
                         SaveClusterData(data)
                     end
-                else
+                 else
                     local data = GetClusterData()
                     if data.Command == "ORBIT" then
                         data.Command = "STOP"
-                        SaveClusterData(data)
+                         SaveClusterData(data)
                     end
                 end
             end
@@ -827,7 +877,7 @@ local mainSuccess, mainError = pcall(function()
         Toggles.Orbit:AddKeyPicker('OrbitKeybind', {
             Default = 'None',
             SyncToggleState = true,
-            Mode = 'Toggle',
+             Mode = 'Toggle',
             Text = 'Orbit Movement Mode Key',
             NoUI = false
         })
@@ -835,12 +885,12 @@ local mainSuccess, mainError = pcall(function()
         RightGroupBox:AddSlider('OrbitSpeedSlider', {
             Text = 'Swarm Orbit Speed Tuning',
             Default = CurrentOrbitSpeed, Min = 5, Max = 60, Rounding = 0,
-            Compact = false,
+             Compact = false,
             Callback = function(Value)
                 CurrentOrbitSpeed = Value
                 SaveMasterConfig(CurrentOrbitSpeed, CurrentOrbitRadius, CurrentM1Frequency, CurrentInfiniteWindow, FOVRadiusGlobal, ShowFOVGlobal)
                 local data = GetClusterData()
-                if data.Command == "ORBIT" then data.OrbitSpeed = CurrentOrbitSpeed; SaveClusterData(data) end
+                 if data.Command == "ORBIT" then data.OrbitSpeed = CurrentOrbitSpeed; SaveClusterData(data) end
             end
         })
 
@@ -848,12 +898,12 @@ local mainSuccess, mainError = pcall(function()
             Text = 'Swarm Orbit Range Tuning',
             Default = CurrentOrbitRadius, Min = 2, Max = 30, Rounding = 0,
             Compact = false,
-            Callback = function(Value)
+             Callback = function(Value)
                 CurrentOrbitRadius = Value
                 SaveMasterConfig(CurrentOrbitSpeed, CurrentOrbitRadius, CurrentM1Frequency, CurrentInfiniteWindow, FOVRadiusGlobal, ShowFOVGlobal)
                 local data = GetClusterData()
                 if data.Command == "ORBIT" then data.OrbitRadius = CurrentOrbitRadius; SaveClusterData(data) end
-            end
+             end
         })
 
         RightGroupBox:AddSlider('M1FrequencySlider', {
@@ -861,7 +911,7 @@ local mainSuccess, mainError = pcall(function()
             Default = CurrentM1Frequency, Min = 0.05, Max = 1.0, Rounding = 2,
             Compact = false,
             Callback = function(Value)
-                CurrentM1Frequency = Value
+                 CurrentM1Frequency = Value
                 SaveMasterConfig(CurrentOrbitSpeed, CurrentOrbitRadius, CurrentM1Frequency, CurrentInfiniteWindow, FOVRadiusGlobal, ShowFOVGlobal)
                 local data = GetClusterData()
                 data.M1Frequency = CurrentM1Frequency
@@ -869,13 +919,13 @@ local mainSuccess, mainError = pcall(function()
             end
         })
 
-        RightGroupBox:AddSlider('InfiniteWindowSlider', {
+         RightGroupBox:AddSlider('InfiniteWindowSlider', {
             Text = 'Infinite Stagger Window (Secs)',
             Default = CurrentInfiniteWindow, Min = 0.4, Max = 3.5, Rounding = 1,
             Compact = false,
             Callback = function(Value)
                 CurrentInfiniteWindow = Value
-                SaveMasterConfig(CurrentOrbitSpeed, CurrentOrbitRadius, CurrentM1Frequency, CurrentInfiniteWindow, FOVRadiusGlobal, ShowFOVGlobal)
+                 SaveMasterConfig(CurrentOrbitSpeed, CurrentOrbitRadius, CurrentM1Frequency, CurrentInfiniteWindow, FOVRadiusGlobal, ShowFOVGlobal)
                 local data = GetClusterData()
                 data.InfiniteWindow = CurrentInfiniteWindow
                 SaveClusterData(data)
@@ -884,13 +934,13 @@ local mainSuccess, mainError = pcall(function()
 
         RightGroupBox:AddDivider()
 
-        RightGroupBox:AddButton({
+         RightGroupBox:AddButton({
             Text = 'Force Respawn All Alts',
             Func = function()
                 local data = GetClusterData()
                 data.Command = "RESPAWN"
                 SaveClusterData(data)
-            end
+             end
         })
 
         RightGroupBox:AddButton({
@@ -902,9 +952,10 @@ local mainSuccess, mainError = pcall(function()
                 data.Target = ""
                 data.AutoM1 = false
                 data.InfiniteCombo = false
+                data.ModeSpam = false
                 data.ChatSpam = false
                 SaveClusterData(data)
-            end
+             end
         })
 
         RightGroupBox:AddDivider()
@@ -916,39 +967,39 @@ local mainSuccess, mainError = pcall(function()
         end
 
         task.spawn(function()
-            while Running do
+             while Running do
                 task.wait(3)
                 pcall(function()
                     PlayerDropdown:SetValues(GetPlayerList())
                 end)
                 
-                pcall(function()
+                 pcall(function()
                     local data = GetClusterData()
                     local activeCount = 0
                     local connectedNames = {}
                     
-                    if data.ActiveBots then
+                     if data.ActiveBots then
                         for botName, timestamp in pairs(data.ActiveBots) do
                             if os.time() - timestamp < 8 then
-                                activeCount = activeCount + 1
+                                 activeCount = activeCount + 1
                                 table.insert(connectedNames, "• " .. botName)
                             end
-                        end
+                         end
                     end
                     
                     TrackerLabel:SetText('Active Bots Connected: ' .. tostring(activeCount))
                     
-                    for idx = 1, 15 do
+                     for idx = 1, 15 do
                         local nameForThisLine = connectedNames[idx]
                         if nameForThisLine then
                             BotLabelsPool[idx]:SetText(nameForThisLine)
-                        else
+                         else
                             if idx == 1 and activeCount == 0 then
                                 BotLabelsPool[idx]:SetText('None connected')
-                            else
+                             else
                                 BotLabelsPool[idx]:SetText('')
                             end
-                        end
+                         end
                     end
                 end)
             end
@@ -958,7 +1009,7 @@ local mainSuccess, mainError = pcall(function()
         local SettingRightBox = Tabs.Settings:AddRightGroupbox('Menu Settings')
         
         SettingLeftBox:AddToggle('AntiAFKToggle', {
-            Text = 'Enable Anti-AFK Engine',
+             Text = 'Enable Anti-AFK Engine',
             Default = false,
             Tooltip = 'Prevents disconnection from 20 minute inactivity kicks.',
             Callback = function(State)
@@ -966,13 +1017,13 @@ local mainSuccess, mainError = pcall(function()
             end
         })
 
-        SettingLeftBox:AddButton({
+         SettingLeftBox:AddButton({
             Text = 'Make Alts Join elvk32',
             Func = function()
                 local data = GetClusterData()
                 data.Command = "JOIN_SERVER"
                 SaveClusterData(data)
-                Library:Notify("[Cluster Master]: Sent server join order to connected alts.", 2)
+                 Library:Notify("[Cluster Master]: Sent server join order to connected alts.", 2)
             end
         })
 
@@ -980,13 +1031,13 @@ local mainSuccess, mainError = pcall(function()
             Text = 'Make Alts Join Controller',
             Func = function()
                 local data = GetClusterData()
-                data.Command = "JOIN_MASTER"
+                 data.Command = "JOIN_MASTER"
                 data.MasterPlaceId = game.PlaceId
                 data.MasterJobId = game.JobId
                 SaveClusterData(data)
                 Library:Notify("[Cluster Master]: Sent follow order to connected alts.", 2)
             end
-        })
+         })
 
         ThemeManager:SetLibrary(Library)
         SaveManager:SetLibrary(Library)
@@ -1000,7 +1051,7 @@ local mainSuccess, mainError = pcall(function()
 
         _G.CancelABAContoller = function()
             Running = false
-            StopAllActions()
+             StopAllActions()
             SetAntiAFKState(false)
             if InputConnection then InputConnection:Disconnect(); InputConnection = nil end
             if FOVConnection then FOVConnection:Disconnect(); FOVConnection = nil end
